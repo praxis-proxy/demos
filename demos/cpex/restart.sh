@@ -26,9 +26,6 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-# Praxis binary path — built from the workspace root with
-# `cargo build --release --features cpex -p praxis`.
-GATEWAY_BIN="../../target/release/praxis"
 GATEWAY_CONFIG="praxis.yaml"
 GATEWAY_LOG="gateway.log"
 KEYCLOAK_HOST="${KEYCLOAK_HOST:-http://localhost:8081}"
@@ -36,9 +33,15 @@ KEYCLOAK_REALM="${KEYCLOAK_REALM:-cpex-demo}"
 KEYCLOAK_READY_URL="${KEYCLOAK_HOST}/realms/${KEYCLOAK_REALM}/.well-known/openid-configuration"
 KEYCLOAK_TIMEOUT="${KEYCLOAK_TIMEOUT:-90}"   # seconds
 
+# Resolve (and build if needed) the praxis-cpex gateway binary. Where
+# praxis comes from is configurable via PRAXIS_BIN / PRAXIS_DIR /
+# PRAXIS_GIT_URL + PRAXIS_GIT_REF — see build-praxis.sh. Defaults to the
+# sibling ../../../praxis checkout. Pre-set GATEWAY_BIN to skip the build.
+GATEWAY_BIN="${GATEWAY_BIN:-$(./build-praxis.sh)}"
 if [ ! -x "$GATEWAY_BIN" ]; then
-  echo "fatal: $GATEWAY_BIN not found. Build praxis with the cpex feature first:" >&2
-  echo "  ( cd ../../ && cargo build --release --features cpex -p praxis )" >&2
+  echo "fatal: praxis binary not found at '$GATEWAY_BIN'." >&2
+  echo "  build-praxis.sh resolves it from PRAXIS_BIN / PRAXIS_DIR /" >&2
+  echo "  PRAXIS_GIT_URL+PRAXIS_GIT_REF, defaulting to ../../../praxis." >&2
   exit 1
 fi
 

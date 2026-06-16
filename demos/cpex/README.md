@@ -63,41 +63,58 @@ feature-gated **`cpex`** filter, **Keycloak** (OIDC IdP), and a mock
 
 ## Quick start
 
-```bash
-# 1. From the praxis workspace root — build the gateway with the
-#    cpex feature enabled. ~5 min cold; ~30s warm. Required ONCE
-#    (or after any code change); restart.sh below assumes the
-#    binary already exists.
-cargo build --release --features cpex -p praxis
+`restart.sh` builds praxis if needed (via `build-praxis.sh`), brings up
+a clean Keycloak + MCP backend, starts the gateway, and smoke-tests
+scenario 01 — so the whole demo is one command:
 
-# 2. From this directory — bring up Keycloak + the mock MCP server.
+```bash
+# From this directory. First run builds praxis (~5 min cold; ~30s warm).
+./restart.sh
+./walkthrough.sh
+```
+
+Prefer the steps spelled out? They're equivalent:
+
+```bash
+# 1. Build the gateway with the cpex feature (resolves the praxis source
+#    per "Configuring the praxis source" below; prints the binary path).
+GATEWAY_BIN="$(./build-praxis.sh)"
+
+# 2. Bring up Keycloak + the mock MCP server.
 docker compose up -d
 
 # 3. Wait for Keycloak to import its realm (30-60s on first start).
 ./verify-token-exchange.sh
 
 # 4. Start the gateway pointing at the demo's praxis.yaml config.
-../../target/release/praxis -c ./praxis.yaml &
+"$GATEWAY_BIN" -c ./praxis.yaml &
 
 # 5. Run the narrated walkthrough.
 ./walkthrough.sh
 ```
 
-### One-shot restart
+## Configuring the praxis source
 
-After step 1 is done once, `./restart.sh` handles steps 2-4 with a
-clean slate (wipes Keycloak state, brings everything back up, smoke
-tests scenario 01). Use this between demos when you want a known-good
-starting state.
+Praxis is **not** vendored in this repo — `build-praxis.sh` decides where
+to get it from (first match wins):
+
+| Env var | Effect |
+|---|---|
+| `PRAXIS_BIN` | Path to an already-built praxis binary; used as-is (no build). |
+| `PRAXIS_DIR` | Path to a praxis checkout; built in place with `--features cpex`. |
+| `PRAXIS_GIT_URL` (+ `PRAXIS_GIT_REF`) | Clone this URL at the given branch/tag/commit into `PRAXIS_SRC` (default `.praxis-src/`), then build. |
+| _(default)_ | A sibling `../../../praxis` checkout if present; otherwise clone the public repo at `PRAXIS_GIT_REF` (default `main`). |
 
 ```bash
-# After step 1 above:
+# Build a specific upstream commit from git:
+PRAXIS_GIT_URL=https://github.com/praxis-proxy/praxis.git \
+PRAXIS_GIT_REF=feat/cpex \
 ./restart.sh
-./walkthrough.sh
-```
 
-If `restart.sh` exits with `fatal: ../../target/release/praxis not
-found`, you skipped step 1 — go build first.
+# Or point at a local checkout / prebuilt binary:
+PRAXIS_DIR=~/src/praxis ./restart.sh
+PRAXIS_BIN=~/src/praxis/target/release/praxis ./restart.sh
+```
 
 ## What the walkthrough demonstrates
 
@@ -129,12 +146,13 @@ Run any one directly: `./scenarios/01-bob-allow.sh`.
 | `verify-token-exchange.sh` | Smoke test: STE v2 is configured correctly |
 | `walkthrough.sh` | Narrated tour through all 7 scenarios |
 | `restart.sh` | One-shot: tear down, bring up, smoke-test the demo |
+| `build-praxis.sh` | Resolves + builds the praxis-cpex gateway (see "Configuring the praxis source") |
 | `agent/` | Optional Python chat agent (uses watsonx) for an LLM-driven demo |
 
 ## Where the filter lives
 
-The `cpex` filter source is at
-[`filter/src/builtins/http/security/cpex/`](../../filter/src/builtins/http/security/cpex/),
+The `cpex` filter source lives in the praxis repository at
+[`filter/src/builtins/http/security/cpex/`](https://github.com/praxis-proxy/praxis/tree/main/filter/src/builtins/http/security/cpex),
 behind the `cpex` Cargo feature on `praxis-proxy-filter` (and forwarded
 by `praxis` via the workspace feature of the same name).
 

@@ -1,7 +1,7 @@
 # CPEX-Praxis HR demo — bring up Keycloak + a mock HR MCP server.
-# The Praxis-CPEX binary itself runs on the host (it's pre-built by
-# `cargo build --release -p praxis-cpex-bin` from the workspace
-# root), not in compose — that way you can rebuild / re-run it
+# The Praxis-CPEX gateway itself runs on the host (built by
+# `./build-praxis.sh`, i.e. `cargo build --release --features cpex -p
+# praxis`), not in compose — that way you can rebuild / re-run it
 # without touching the IdP or MCP state.
 #
 #   docker compose up -d              # bring up keycloak + mcp server

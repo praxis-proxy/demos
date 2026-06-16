@@ -1,0 +1,5 @@
+# praxis source cloned by build-praxis.sh when no checkout is configured
+.praxis-src/
+
+# gateway stdout/stderr captured by restart.sh
+gateway.log

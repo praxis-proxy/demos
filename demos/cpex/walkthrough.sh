@@ -74,7 +74,7 @@ if ! curl -fsS --max-time 2 -o /dev/null -X POST http://localhost:8090/mcp \
     -H "Content-Type: application/json" -d '{}' 2>/dev/null; then
   if ! lsof -nP -iTCP:8090 -sTCP:LISTEN 2>/dev/null | grep -q LISTEN; then
     echo "  $(yellow ✗) gateway is not listening on :8090"
-    echo "  $(dim "from this directory: ../../target/release/praxis -c ./praxis.yaml &")"
+    echo "  $(dim "from this directory: ./restart.sh   (builds praxis if needed, then starts it)")"
     exit 1
   fi
 fi
@@ -207,5 +207,5 @@ echo "        for application denials (HTTP 200, code -32001), HTTP 401 +"
 echo "        WWW-Authenticate for transport-level auth failures."
 echo
 beat "To try this through an LLM, start chat.py:"
-echo "      $(dim "cd agent && ./run-watsonx.sh bob       # or use --model")"
+echo "      $(dim "cd agent && python chat.py --persona bob   # or use --model")"
 echo

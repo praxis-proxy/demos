@@ -5,14 +5,11 @@ demonstrate. Read it line-by-line during the demo; the LLM does the rest.
 
 ## Setup (once)
 
-In one terminal:
+In one terminal — from the demo root (one level up from `agent/`):
 
 ```bash
-# from integrations/praxis-cpex/examples/demo
-docker compose up -d
-./verify-token-exchange.sh           # expect "Token exchange works."
-( cd ../../ && cargo build --release -p praxis-cpex-bin )
-../../target/release/praxis-cpex -c ./praxis.yaml &
+cd ..
+./restart.sh                          # builds praxis (cpex) + brings up Keycloak/MCP
 ```
 
 In a second terminal (so the audience can see what reaches the backend):
@@ -25,7 +22,8 @@ In a third terminal (the demo itself):
 
 ```bash
 cd agent
-./run-watsonx.sh bob                 # opens chat as Bob with watsonx Llama
+pip install -r requirements.txt       # once
+python chat.py --persona bob          # opens chat as Bob with watsonx Llama
 ```
 
 The script writes a banner showing persona + model + gateway URL.
