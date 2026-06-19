@@ -70,11 +70,11 @@ a scoped request to the MCP tool. In a single pass it:
 | host                                                             |
 |                                                                  |
 |   praxis (--features cpex)   :8090                               |
-|     filter: mcp            parse JSON-RPC, set mcp.method/name    |
-|     filter: cpex           identity + APL + PDP + delegation +    |
-|                            PII + audit + taint + body rewrite     |
-|     filter: router         forward / to the hr-mcp upstream       |
-|     filter: load_balancer  single-endpoint cluster                |
+|     filter: mcp            parse JSON-RPC, set mcp.method/name   |
+|     filter: cpex           identity + APL + PDP + delegation +   |
+|                            PII + audit + taint + body rewrite    |
+|     filter: router         forward / to the hr-mcp upstream      |
+|     filter: load_balancer  single-endpoint cluster               |
 +------------------------------------------------------------------+
         ^                                  v
   chat / curl                       hr-mcp-server (Python, docker)
@@ -83,12 +83,12 @@ a scoped request to the MCP tool. In a single pass it:
 
 +------------------------------------------------------------------+
 | docker compose                                                   |
-|   keycloak   cpex-demo realm: bob/alice/eve users; praxis-gateway |
-|              / workday-api / github-api clients; STE v2           |
-|   hr-mcp     mock MCP server: get_compensation, send_email,       |
-|              search_repos                                         |
-|   valkey     :6379, CPEX session store: taint labels keyed by     |
-|              H(subject:session_id), durable across gateway restart |
+|   keycloak  cpex-demo realm: bob/alice/eve users; praxis-gateway |
+|             / workday-api / github-api clients; STE v2           |
+|   hr-mcp    mock MCP server: get_compensation, send_email,       |
+|             search_repos                                         |
+|   valkey    :6379, CPEX session store: taint labels keyed by     |
+|             H(subject:session_id), durable across gateway restart|
 +------------------------------------------------------------------+
 ```
 
