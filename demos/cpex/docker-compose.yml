@@ -56,3 +56,21 @@ services:
       timeout: 3s
       retries: 10
       start_period: 5s
+
+  # Session-store backend for CPEX taint labels. The cpex configs point
+  # `global.session_store` at kind: valkey, endpoint localhost:6379, so
+  # the `secret` label written by get_compensation persists here (keyed
+  # by H(subject:session_id)) and survives a gateway restart — unlike the
+  # in-memory default. The gateway runs on the host and reaches Valkey
+  # via the published port below.
+  valkey:
+    image: valkey/valkey:8
+    container_name: cpex-demo-valkey
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 2s

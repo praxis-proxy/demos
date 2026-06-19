@@ -1,7 +1,13 @@
 # CPEX HR Demo
 
-End-to-end demo of **Praxis** with the feature-gated **`cpex`** filter,
-**Keycloak** as the OIDC IdP, and a mock **MCP server**. It exercises the full
+An agent that can call tools can also leak data, exceed a user's privileges, or
+act on a credential it should never hold. This demo puts **Praxis** between the
+agent and its tools as an identity-aware control point. One policy layer decides
+who can call what, what data comes back, and where that data is allowed to go
+next.
+
+It is an end-to-end setup of **Praxis** with the feature-gated **`cpex`** filter,
+**Keycloak** as the OIDC IdP, and a mock **MCP server**, exercising the full
 CPEX/APL (Authorization Policy Logic) stack:
 
 - multi-source identity (user, agent, and workload JWTs in separate headers,
@@ -14,9 +20,15 @@ CPEX/APL (Authorization Policy Logic) stack:
 - structured audit emission
 - session taint (cross-tool, cross-request data-flow control)
 
-## The story
+## Scenario
 
-Three personas carry it:
+<p align="center">
+  <img src="docs/figures/demo_scenario.png" alt="Demo scenario">
+</p>
+
+A single agent serves three people and reaches three backends over the Model
+Context Protocol: HR records, code repositories, and email. Everyone talks to the
+same agent, and the agent calls the same tools. Identity decides the outcome.
 
 | Persona | Identity | Result |
 |---|---|---|
@@ -24,12 +36,34 @@ Three personas carry it:
 | Eve | HR, no `view_ssn` | Same record, SSN redacted |
 | Alice | Engineering | Denied HR tools; allowed internal repos, denied external |
 
-Bob and Eve send the byte-for-byte same `get_compensation` request and the
-backend returns the same record, but Eve's response comes back without the SSN
-because the policy redacts it. Bob's request reaches the backend with a freshly
-minted, audience-scoped token, never his original IdP JWT.
+Two outcomes make the value concrete:
 
-## What runs where
+- **Same request, different data.** Bob and Eve send the byte-for-byte same
+  `get_compensation` request and the backend returns the same record. Eve's
+  response comes back without the SSN because the policy redacts it on the wire.
+  The tool never makes that call; Praxis does. Bob's request reaches the backend
+  with a freshly minted, audience-scoped token, never his original IdP JWT.
+- **Data flow follows the conversation.** Once a session has touched compensation
+  data, Praxis stops that session from sending external email, even when the email
+  body is clean. The taint travels with the session, not the message.
+
+## Architecture
+
+<p align="center">
+  <img src="docs/figures/demo_arch.png" alt="Demo architecture" width="65%">
+</p>
+
+The agent never talks to a tool directly. Every call passes through Praxis, which
+authenticates the caller against Keycloak, runs the policy, and only then forwards
+a scoped request to the MCP tool. In a single pass it:
+
+- resolves identity from the user, agent, and workload tokens
+- runs the APL gate and a PDP (Cedar or CEL) for relationship-based decisions
+- exchanges the user token for an audience-scoped backend token (RFC 8693)
+- redacts sensitive fields and scans arguments for PII
+- tracks session taint and emits a structured audit record
+
+### What runs where
 
 ```text
 +------------------------------------------------------------------+
@@ -53,6 +87,8 @@ minted, audience-scoped token, never his original IdP JWT.
 |              / workday-api / github-api clients; STE v2           |
 |   hr-mcp     mock MCP server: get_compensation, send_email,       |
 |              search_repos                                         |
+|   valkey     :6379, CPEX session store: taint labels keyed by     |
+|              H(subject:session_id), durable across gateway restart |
 +------------------------------------------------------------------+
 ```
 
@@ -60,7 +96,7 @@ minted, audience-scoped token, never his original IdP JWT.
 
 - Docker daemon running (Docker Desktop, Rancher Desktop, or Colima)
 - Rust toolchain (whatever praxis's `rust-version` requires)
-- Ports `8081`, `8090`, `9100` free on localhost
+- Ports `8081`, `8090`, `9100`, `6379` free on localhost
 
 ## Quick start
 
@@ -77,7 +113,7 @@ The equivalent steps, spelled out:
 
 ```bash
 GATEWAY_BIN="$(./build-praxis.sh)"   # build the cpex gateway, print its path
-docker compose up -d                 # Keycloak + mock MCP server
+docker compose up -d                 # Keycloak + mock MCP server + valkey
 ./verify-token-exchange.sh           # wait for the realm import, check STE v2
 "$GATEWAY_BIN" -c ./praxis.yaml &     # start the gateway
 ./walkthrough.sh                     # narrated tour of the core scenarios
@@ -150,7 +186,7 @@ Both PDP backends are compiled into the same binary. The config's
 runs. The CEL step also shows an `on_deny:` reaction attaching a human reason and
 a stable violation code; `on_deny` and `on_allow` work on any PDP step.
 
-## Session taint (scenarios 08 and 09)
+## Session taint
 
 `get_compensation` runs `taint(secret, session)`, attaching the label `secret` to
 the session. `send_email` then refuses to send when the session carries it:
@@ -184,9 +220,34 @@ not the content, which is what separates it from scenario 07's content-based PII
 deny. Scenario 09 shows the taint cannot cross principals.
 
 Tainting is independent of the PDP, so 08 and 09 behave the same under both
-`cpex.yaml` and `cpex-cel.yaml`. The session store is in-memory and per process:
-taint resets when the gateway restarts, and the scenarios use fresh per-run
-session ids so reruns start clean.
+`cpex.yaml` and `cpex-cel.yaml`.
+
+### Where taint is stored
+
+Both configs point `global.session_store` at Valkey:
+
+```yaml
+global:
+  session_store:
+    kind: valkey
+    endpoint: localhost:6379
+```
+
+So labels live in the `valkey` container (keys under the `taint:v1` prefix),
+not in the gateway process. Taint survives a gateway restart and can be shared
+across gateway instances. Inspect or clear it directly:
+
+```bash
+docker compose exec valkey valkey-cli keys 'taint:v1:*'   # one key per tainted session
+docker compose exec valkey valkey-cli flushall            # clear all taint
+```
+
+To see persistence across a restart: run scenario 08 step 2 (the
+`get_compensation` that taints), restart only the gateway (do not run
+`restart.sh`, which wipes the containers), then send the step-3 `send_email` on
+the same session id. It is still denied. Drop the `session_store` block to fall
+back to the in-process store, which resets on restart. The scenarios use fresh
+per-run session ids either way, so reruns start clean.
 
 ## Notes
 
@@ -208,7 +269,7 @@ the padding, so the wire stays correct. This is documented in the filter source.
 | `cpex.yaml` | CPEX policy: plugins, routes, Cedar PDP policy text |
 | `praxis-cel.yaml` | Same listener as `praxis.yaml`, loads `cpex-cel.yaml`. Run via `GATEWAY_CONFIG=praxis-cel.yaml` |
 | `cpex-cel.yaml` | CEL variant: `search_repos` uses an inline `cel:` expression, no `apl:` wrapper |
-| `docker-compose.yml` | Keycloak (8081) and hr-mcp (9100) |
+| `docker-compose.yml` | Keycloak (8081), hr-mcp (9100), and valkey (6379) |
 | `keycloak/realm-export.json` | Realm with users, clients, and STE v2 |
 | `hr-mcp-server/` | Python mock MCP server (Dockerfile and `server.py`) |
 | `scenarios/*.sh` | The nine scenarios (including 08 and 09 session taint) and `_lib.sh` helpers |
@@ -227,4 +288,4 @@ behind the `cpex` Cargo feature on `praxis-proxy-filter`. That feature registers
 both the Cedar (`apl-pdp-cedar-direct`) and CEL (`apl-pdp-cel`) PDP backends, so
 one binary serves both `cpex.yaml` and `cpex-cel.yaml`. See the filter's own
 README there for configuration and internals.
-```
+

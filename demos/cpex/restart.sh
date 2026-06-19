@@ -96,6 +96,22 @@ done
 printf "\n"
 ok "Keycloak responding at $KEYCLOAK_READY_URL"
 
+# 4b. Wait for Valkey (CPEX session-store backend). The gateway connects
+# lazily on first request, so this is a fail-loud guard rather than a
+# hard dependency — a down Valkey would otherwise surface as a denied
+# request mid-scenario.
+step "waiting for Valkey (session store)"
+deadline=$(( $(date +%s) + 30 ))
+while [ "$(docker compose exec -T valkey valkey-cli ping 2>/dev/null | tr -d '\r')" != "PONG" ]; do
+  if [ "$(date +%s)" -ge "$deadline" ]; then
+    die "Valkey not ready after 30s — check 'docker compose logs valkey'"
+  fi
+  printf "."
+  sleep 1
+done
+printf "\n"
+ok "Valkey responding (PONG) on localhost:6379"
+
 # 5. verify-token-exchange smoke check (skip on failure but warn loudly).
 step "verifying RFC 8693 token-exchange permission"
 if ./verify-token-exchange.sh >/dev/null 2>&1; then

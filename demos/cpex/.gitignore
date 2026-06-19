@@ -3,3 +3,9 @@
 
 # gateway stdout/stderr captured by restart.sh
 gateway.log
+
+# Python virtualenv + caches for the agent/ chat client
+agent/.venv/
+__pycache__/
+*.pyc
+.env

@@ -9,8 +9,8 @@
 # from scenario 07's content-based PII deny.
 #
 # Three beats, with fresh per-run session ids so reruns start clean
-# (the gateway's session store is in-memory and persists for the life
-# of the process):
+# (taint labels persist in the Valkey session store, keyed by
+# H(subject:session_id), so a fixed id would carry over between runs):
 #   S1 send_email (clean session)      → 200 OK
 #   S2 get_compensation (taints sess)  → 200 OK  (+ taint(secret, session))
 #   S3 send_email (SAME session as S2) → HTTP 200 + JSON-RPC error -32001,
