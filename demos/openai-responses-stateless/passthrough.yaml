@@ -1,0 +1,43 @@
+listeners:
+  - name: gateway
+    address: "127.0.0.1:8080"
+    filter_chains: [responses]
+
+filter_chains:
+  - name: responses
+    filters:
+      - filter: openai_responses_format
+        on_invalid: reject
+        branch_chains:
+          - name: stateful
+            on_result:
+              filter: openai_responses_format
+              key: mode
+              result: stateful
+            chains:
+              - name: stateful-chain
+                filters:
+                  # Placeholder: stateful chain would include
+                  # response_store, rehydrate, tool_dispatch, etc.
+                  - filter: router
+                    routes:
+                      - path_prefix: "/"
+                        cluster: "vllm"
+                  - filter: load_balancer
+                    clusters:
+                      - name: "vllm"
+                        endpoints:
+                          - "127.0.0.1:8000"
+            rejoin: terminal
+
+      # Stateless path: store=false with no stateful markers.
+      # Request is forwarded unchanged — zero additional processing.
+      - filter: router
+        routes:
+          - path_prefix: "/"
+            cluster: "vllm"
+      - filter: load_balancer
+        clusters:
+          - name: "vllm"
+            endpoints:
+              - "127.0.0.1:8000"
