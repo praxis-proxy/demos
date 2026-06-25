@@ -1,0 +1,41 @@
+listeners:
+  - name: gateway
+    address: "127.0.0.1:${PRAXIS_PORT}"
+    filter_chains: [codex-passthrough]
+
+filter_chains:
+  - name: codex-passthrough
+    filters:
+      - filter: headers
+        request_set:
+          - name: host
+            value: api.openai.com
+
+      - filter: openai_responses_format
+        on_invalid: continue
+
+      - filter: openai_responses_model_rewrite
+        default_model: "${OPENAI_MODEL}"
+        model_aliases:
+          ${CODEX_CLIENT_MODEL}: "${OPENAI_MODEL}"
+        headers:
+          effective_model: x-praxis-ai-effective-model
+          original_model: x-praxis-ai-original-model
+
+      - filter: router
+        routes:
+          - path: "/v1/responses"
+            headers:
+              x-praxis-ai-effective-model: "${OPENAI_MODEL}"
+            cluster: "openai"
+          - path_prefix: "/v1/"
+            cluster: "openai"
+
+      - filter: load_balancer
+        clusters:
+          - name: "openai"
+            endpoints:
+              - "api.openai.com:443"
+            tls:
+              sni: "api.openai.com"
+              verify: true
