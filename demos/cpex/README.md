@@ -1,4 +1,4 @@
-# CPEX HR Demo
+# CPEX Policy Engine Demo
 
 An agent that can call tools can also leak data, exceed a user's privileges, or
 act on a credential it should never hold. This demo puts **Praxis** between the
@@ -6,9 +6,8 @@ agent and its tools as an identity-aware control point. One policy layer decides
 who can call what, what data comes back, and where that data is allowed to go
 next.
 
-It is an end-to-end setup of **Praxis** with the feature-gated **`cpex`** filter,
-**Keycloak** as the OIDC IdP, and a mock **MCP server**, exercising the full
-CPEX/APL (Authorization Policy Logic) stack:
+It is an end-to-end setup of **Praxis** with the **`cpex`** policy engine filter,
+**Keycloak** as the OIDC IdP, and a mock **MCP server**, exercising a complete authorization pipeline:
 
 - multi-source identity (user, agent, and workload JWTs in separate headers,
   each validated by its own identity plugin)
@@ -69,12 +68,12 @@ a scoped request to the MCP tool. In a single pass it:
 +------------------------------------------------------------------+
 | host                                                             |
 |                                                                  |
-|   praxis (--features cpex)   :8090                               |
-|     filter: mcp            parse JSON-RPC, set mcp.method/name    |
-|     filter: cpex           identity + APL + PDP + delegation +    |
-|                            PII + audit + taint + body rewrite     |
-|     filter: router         forward / to the hr-mcp upstream       |
-|     filter: load_balancer  single-endpoint cluster                |
+|   praxis (--features cpex-policy-engine)   :8090                 |
+|     filter: mcp            parse JSON-RPC, set mcp.method/name   |
+|     filter: policy         identity + PDP + delegation +         |
+|                            PII + audit + taint + body rewrite    |
+|     filter: router         forward / to the hr-mcp upstream      |
+|     filter: load_balancer  single-endpoint cluster               |
 +------------------------------------------------------------------+
         ^                                  v
   chat / curl                       hr-mcp-server (Python, docker)
@@ -83,12 +82,12 @@ a scoped request to the MCP tool. In a single pass it:
 
 +------------------------------------------------------------------+
 | docker compose                                                   |
-|   keycloak   cpex-demo realm: bob/alice/eve users; praxis-gateway |
-|              / workday-api / github-api clients; STE v2           |
-|   hr-mcp     mock MCP server: get_compensation, send_email,       |
-|              search_repos                                         |
-|   valkey     :6379, CPEX session store: taint labels keyed by     |
-|              H(subject:session_id), durable across gateway restart |
+|   keycloak  cpex-demo realm: bob/alice/eve users; praxis-gateway |
+|             / workday-api / github-api clients; STE v2           |
+|   hr-mcp    mock MCP server: get_compensation, send_email,       |
+|             search_repos                                         |
+|   valkey    :6379, CPEX session store: taint labels keyed by     |
+|             H(subject:session_id), durable across gateway restart|
 +------------------------------------------------------------------+
 ```
 
@@ -127,7 +126,7 @@ match wins):
 | Env var | Effect |
 |---|---|
 | `PRAXIS_BIN` | Path to an already-built praxis binary. Used as-is, no build. |
-| `PRAXIS_DIR` | Path to a praxis checkout. Built in place with `--features cpex`. |
+| `PRAXIS_DIR` | Path to a praxis checkout. Built in place with `--features cpex-policy-engine`. |
 | `PRAXIS_GIT_URL` (+ `PRAXIS_GIT_REF`) | Clone this URL at the given branch, tag, or commit into `PRAXIS_SRC` (default `.praxis-src/`), then build. |
 | default | A sibling `../../../praxis` checkout if present, otherwise clone the public repo at `PRAXIS_GIT_REF` (default `main`). |
 

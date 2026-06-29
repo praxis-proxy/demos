@@ -35,11 +35,11 @@ log() { printf '\033[1;34m[build-praxis]\033[0m %s\n' "$*" >&2; }
 die() { printf '\033[1;31m[build-praxis] %s\033[0m\n' "$*" >&2; exit 1; }
 
 build_in() {
-  # Build praxis with the cpex feature in $1 and echo the binary path.
+  # Build praxis with the policy engine feature in $1 and echo the binary path.
   local dir="$1"
   [ -f "$dir/Cargo.toml" ] || die "no Cargo.toml in $dir — not a praxis checkout"
-  log "cargo build --release --features cpex -p praxis  (in $dir)"
-  ( cd "$dir" && cargo build --release --features cpex -p praxis >&2 )
+  log "cargo build --release --features cpex-policy-engine -p praxis-proxy  (in $dir)"
+  ( cd "$dir" && cargo build --release --features cpex-policy-engine -p praxis-proxy >&2 )
   local bin="$dir/$REL_BIN"
   [ -x "$bin" ] || die "expected binary not found at $bin"
   log "built $bin"

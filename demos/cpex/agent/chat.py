@@ -38,8 +38,8 @@ Usage:
     pip install -r requirements.txt
 
     # No API keys required — default points at a local Ollama with
-    # llama3.1. Install Ollama (https://ollama.com) and `ollama pull
-    # llama3.1` first.
+    # llama3. Install Ollama (https://ollama.com) and `ollama pull
+    # llama3` first.
     python chat.py --persona bob
 
     # Or use any LiteLLM-supported provider via env:
@@ -75,7 +75,7 @@ from rich.panel import Panel
 # Defaults
 # ---------------------------------------------------------------------------
 
-DEFAULT_MODEL = "ollama/llama3.1"  # local, no API key required
+DEFAULT_MODEL = "ollama/qwen3:8b"  # local, no API key required
 DEFAULT_GATEWAY = "http://localhost:8090/mcp"
 DEFAULT_KEYCLOAK = "http://localhost:8081"
 KEYCLOAK_REALM = "cpex-demo"
@@ -118,14 +118,26 @@ SYSTEM_PROMPT = (
     "employee compensation, view directories, send emails, and similar "
     "tasks. Use the provided tools when needed. "
     "\n\n"
+    "Only request data the user actually asked for: in particular, set "
+    "get_compensation's `include_ssn` to true ONLY when the user explicitly "
+    "asks to include/show the SSN. If the user just asks to look up "
+    "compensation without mentioning the SSN, leave `include_ssn` false. "
+    "\n\n"
+    "CRITICAL — relay tool data verbatim: when you present a field, copy its "
+    "value EXACTLY as it appears in the tool result. Never invent, mask, "
+    "redact, or replace a value yourself. Only write `[REDACTED]` for a field "
+    "if the tool result's value for that field is literally the string "
+    "`[REDACTED]`; when the tool returns a real value (for example an actual "
+    "social-security number), show that exact value unchanged. The gateway — "
+    "not you — decides what to hide; your job is to relay precisely what it "
+    "returned. "
+    "\n\n"
     "How to interpret tool results: "
     "\n"
-    "  * If the tool returns a normal result, present the data to the "
-    "user. If any field's value is the literal string `[REDACTED]`, "
-    "show it as-is in your answer — that is the gateway's transparent "
-    "enforcement marker that the field exists but is hidden for this "
-    "caller. Do NOT apologize or refuse; just include the field with "
-    "the value `[REDACTED]`. "
+    "  * Normal result: present the data, copying each value verbatim per the "
+    "rule above. A field whose value is `[REDACTED]` is the gateway's "
+    "transparent enforcement marker (the field exists but is hidden for this "
+    "caller) — show it as-is; do NOT apologize or refuse. "
     "\n"
     "  * If the tool returns an `error` envelope (a JSON-RPC error "
     "with a `code` and `message`), the gateway denied the call. "
