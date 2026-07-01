@@ -163,7 +163,7 @@ plugins:
       default_outbound_header: "Authorization"
 
 global:
-  identity:
+  authentication:
     - jwt-user
     - jwt-client
 
@@ -220,33 +220,36 @@ global:
 
 routes:
   - tool: get_compensation
-    policy:
-      - "require(role.hr)"
-      - "delegate(workday-oauth, target: workday-api, audience: workday-api, permissions: [read_compensation])"
-      - "taint(secret, session)"
-      - "run(audit-log)"
+    authorization:
+      pre_invocation:
+        - "require(role.hr)"
+        - "delegate(workday-oauth, target: workday-api, audience: workday-api, permissions: [read_compensation])"
+        - "taint(secret, session)"
+        - "run(audit-log)"
     args:
       ssn: "str | redact(!perm.view_ssn)"
     result:
       ssn: "str | redact(!perm.view_ssn)"
 
   - tool: search_repos
-    policy:
-      - "require(team.engineering | team.security)"
-      - cedar:
-          action: 'Action::"read"'
-          resource:
-            type: Repo
-            id: ${args.repo_name}
-            attributes:
-              visibility: ${args.visibility}
-      - "delegate(github-oauth, target: github-api, audience: github-api, permissions: [repo:read:internal])"
-      - "!(delegation.granted.permissions contains 'repo:read:internal'): deny"
-      - "run(audit-log)"
+    authorization:
+      pre_invocation:
+        - "require(team.engineering | team.security)"
+        - cedar:
+            action: 'Action::"read"'
+            resource:
+              type: Repo
+              id: ${args.repo_name}
+              attributes:
+                visibility: ${args.visibility}
+        - "delegate(github-oauth, target: github-api, audience: github-api, permissions: [repo:read:internal])"
+        - "!(delegation.granted.permissions contains 'repo:read:internal'): deny"
+        - "run(audit-log)"
 
   - tool: send_email
-    policy:
-      - "require(perm.email_send)"
-      - "run(audit-log)"
-      - "run(pii-scan)"
-      - "security.labels contains \"secret\": deny('external email blocked: this session accessed secret data', 'session_tainted_secret')"
+    authorization:
+      pre_invocation:
+        - "require(perm.email_send)"
+        - "run(audit-log)"
+        - "run(pii-scan)"
+        - "security.labels contains \"secret\": deny('external email blocked: this session accessed secret data', 'session_tainted_secret')"

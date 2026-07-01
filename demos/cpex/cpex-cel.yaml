@@ -169,7 +169,7 @@ plugins:
       default_outbound_header: "Authorization"
 
 global:
-  identity:
+  authentication:
     - jwt-user
     - jwt-client
 
@@ -188,8 +188,9 @@ global:
   # both express the SAME decision so the two are directly comparable.
   #
   # NOTE: this config omits the `apl:` wrapper — APL terms (`pdp:` here,
-  # `policy:`/`args:`/`result:` on the routes below) sit directly on the
-  # section. cpex accepts both forms; see cpex.yaml for the wrapped style.
+  # `pre_invocation:`/`args:`/`result:` on the routes below) sit directly
+  # on the section. cpex accepts both forms; see cpex.yaml for the nested
+  # `authorization:` style.
   # ----------------------------------------------------------------
   pdp:
     - kind: cel
@@ -222,7 +223,7 @@ global:
 routes:
 
   - tool: get_compensation
-    policy:
+    pre_invocation:
       - "require(role.hr)"
       - "delegate(workday-oauth, target: workday-api, audience: workday-api, permissions: [read_compensation])"
       - "taint(secret, session)"
@@ -233,7 +234,7 @@ routes:
       ssn: "str | redact(!perm.view_ssn)"
 
   - tool: search_repos
-    policy:
+    pre_invocation:
       - "require(team.engineering | team.security)"
       - cel:
           expr: |
@@ -246,7 +247,7 @@ routes:
       - "run(audit-log)"
 
   - tool: send_email
-    policy:
+    pre_invocation:
       - "require(perm.email_send)"
       - "run(audit-log)"
       - "run(pii-scan)"
