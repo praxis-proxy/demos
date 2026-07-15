@@ -13,7 +13,10 @@ services:
     # 26.2+ ships Standard Token Exchange v2 — simpler than v1's
     # fine-grained authz-services permissions. See the README's
     # "Architectural patterns" section for the difference.
-    image: quay.io/keycloak/keycloak:26.2
+    # Built from ./keycloak/Dockerfile — stock Keycloak 26.2 plus the CIBA
+    # HTTP authentication-channel SPI compiled from keycloak/ciba-spi/.
+    build:
+      context: ./keycloak
     container_name: cpex-demo-keycloak
     command:
       - start-dev
@@ -22,7 +25,16 @@ services:
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
       KC_BOOTSTRAP_ADMIN_PASSWORD: admin
-      KC_HOSTNAME: localhost
+      # Pin a *fixed* frontend URL (full URL, not a bare hostname). Under
+      # HostnameV2, a bare `localhost` resolves scheme/port per request Host,
+      # so the gateway's poll (arriving as localhost:8081) and the
+      # auth-channel's CIBA approval callback (arriving as keycloak:8081)
+      # resolve *different* issuer/realm contexts — the approval registers in
+      # one and the poll reads the other, so an approved request never
+      # applies. A fixed URL makes issuer/context host-independent, so both
+      # sides agree. Backchannel stays non-dynamic (default) so it uses this
+      # same fixed URL rather than the request Host. See CIBA-HOSTNAME-ISSUE.md.
+      KC_HOSTNAME: http://localhost:8081
       KC_HOSTNAME_STRICT: "false"
       KC_HTTP_ENABLED: "true"
       # Standard Token Exchange v2 — the source client opts in via
@@ -31,6 +43,12 @@ services:
       # audience clients it'll exchange for. Simpler config than
       # v1's per-target authorization-services permission.
       KC_FEATURES: token-exchange-standard
+      # CIBA decoupled-auth channel. The custom SPI (mounted below) POSTs
+      # each pending approval to the auth-channel web UI; the approver
+      # clicks Approve there and the UI calls Keycloak back. Provider id
+      # `http-authentication-channel`; the URI is the compose service.
+      KC_SPI_CIBA_AUTH_CHANNEL_PROVIDER: http-authentication-channel
+      KC_SPI_CIBA_AUTH_CHANNEL_HTTP_AUTHENTICATION_CHANNEL_HTTP_AUTHENTICATION_CHANNEL_URI: "http://auth-channel:5001/ciba/auth"
     volumes:
       - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
     ports:
@@ -63,6 +81,22 @@ services:
   # by H(subject:session_id)) and survives a gateway restart — unlike the
   # in-memory default. The gateway runs on the host and reaches Valkey
   # via the published port below.
+  # CIBA approval UI — the manager's "phone". Keycloak's CIBA channel SPI
+  # POSTs pending approvals here; the approver opens http://localhost:5001
+  # and clicks Approve/Deny, which calls Keycloak back. Reachable from the
+  # browser on :5001 and from Keycloak on the compose net as `auth-channel`.
+  auth-channel:
+    build:
+      context: ./auth-channel
+    container_name: cpex-demo-auth-channel
+    environment:
+      # Where the UI POSTs the approval callback — the demo's own Keycloak,
+      # reached on the compose network (it listens on 8081).
+      KEYCLOAK_BASE: "http://keycloak:8081"
+      KEYCLOAK_REALM: "cpex-demo"
+    ports:
+      - "5001:5001"
+
   valkey:
     image: valkey/valkey:8
     container_name: cpex-demo-valkey

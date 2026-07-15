@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Praxis Contributors
+#
+# Thin gateway binary for the CPEX HR demo. Composes praxis-ai's AI filters
+# (mcp classifier, …) with the CPEX/HIL `policy` filter by:
+#   * depending on praxis-ai's server (which auto-registers the AI filters), and
+#   * enabling `cpex-policy-engine`, which auto-registers the `policy` filter via
+#     praxis-proxy-filter's own builtins registry.
+# No manual filter registration.
+#
+# The `[patch.crates-io]` points praxis-proxy-* at our fork so the HIL
+# elicitation changes are included. Once those land upstream, drop the patch and
+# this builds against published praxis directly.
+[package]
+name = "cpex-praxis-gateway"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "cpex-praxis-gateway"
+path = "src/main.rs"
+
+[dependencies]
+# praxis-ai's server (unmodified upstream) — registers the AI filters and
+# exposes `run_server`.
+praxis-ai-proxy = { git = "https://github.com/praxis-proxy/ai", rev = "47a0ffb2784790d14750cb3fa0b29fcd037e9555" }
+# Declared only to turn on the cpex/policy engine feature graph-wide.
+praxis-proxy-filter = { version = "0.4.0", features = ["cpex-policy-engine"] }
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+
+[target.'cfg(unix)'.dependencies]
+tikv-jemallocator = "0.7"
+
+# Source override: build praxis-proxy from our HIL fork instead of crates.io.
+# The patch points at `.praxis/` (relative, portable) — a symlink/checkout that
+# `build-gateway.sh` populates from PRAXIS_DIR or PRAXIS_GIT_URL (`.praxis` is
+# gitignored). Once the HIL changes are upstream, delete this whole section and
+# it builds against published praxis directly.
+[patch.crates-io]
+praxis-proxy-core = { path = ".praxis/core" }
+praxis-proxy-filter = { path = ".praxis/filter" }
+praxis-proxy-protocol = { path = ".praxis/protocol" }
+praxis-proxy-tls = { path = ".praxis/tls" }

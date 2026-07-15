@@ -1,0 +1,3 @@
+# Match the praxis/cpex toolchain pin (their MSRV). Bump together with upstream.
+[toolchain]
+channel = "1.96.0"

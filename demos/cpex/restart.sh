@@ -18,6 +18,13 @@
 #
 # Usage (from this directory):
 #   ./restart.sh
+#   REBUILD_IMAGES=1 ./restart.sh   # force-rebuild container images first
+#
+# `docker compose up -d` builds any *missing* images (Keycloak + the CIBA
+# SPI, auth-channel, hr-mcp) but reuses existing ones. The gateway binary is
+# always rebuilt by build-gateway.sh, so Rust changes are picked up either
+# way; set REBUILD_IMAGES=1 after editing the SPI (keycloak/ciba-spi/),
+# auth-channel, or hr-mcp source so those images are rebuilt too.
 #
 # Logs:
 #   ./gateway.log   — gateway stdout/stderr, follow with `tail -F`.
@@ -35,15 +42,19 @@ KEYCLOAK_REALM="${KEYCLOAK_REALM:-cpex-demo}"
 KEYCLOAK_READY_URL="${KEYCLOAK_HOST}/realms/${KEYCLOAK_REALM}/.well-known/openid-configuration"
 KEYCLOAK_TIMEOUT="${KEYCLOAK_TIMEOUT:-90}"   # seconds
 
+# Force-rebuild container images (Keycloak+SPI, auth-channel, hr-mcp) before
+# starting. Off by default so `up -d` reuses cached images; set to 1 after
+# editing image source (e.g. keycloak/ciba-spi/).
+REBUILD_IMAGES="${REBUILD_IMAGES:-0}"
+
 # Resolve (and build if needed) the praxis-cpex gateway binary. Where
-# praxis comes from is configurable via PRAXIS_BIN / PRAXIS_DIR /
-# PRAXIS_GIT_URL + PRAXIS_GIT_REF — see build-praxis.sh. Defaults to the
-# sibling ../../../praxis checkout. Pre-set GATEWAY_BIN to skip the build.
-GATEWAY_BIN="${GATEWAY_BIN:-$(./build-praxis.sh)}"
+# The gateway is built from ./gateway (composes praxis-ai + the CPEX/HIL policy
+# filter) — see build-gateway.sh. Pre-set GATEWAY_BIN to skip the build, or
+# GATEWAY_PROFILE=debug for a faster build.
+GATEWAY_BIN="${GATEWAY_BIN:-$(./build-gateway.sh)}"
 if [ ! -x "$GATEWAY_BIN" ]; then
-  echo "fatal: praxis binary not found at '$GATEWAY_BIN'." >&2
-  echo "  build-praxis.sh resolves it from PRAXIS_BIN / PRAXIS_DIR /" >&2
-  echo "  PRAXIS_GIT_URL+PRAXIS_GIT_REF, defaulting to ../../../praxis." >&2
+  echo "fatal: gateway binary not found at '$GATEWAY_BIN'." >&2
+  echo "  build-gateway.sh builds ./gateway; see gateway/Cargo.toml." >&2
   exit 1
 fi
 
@@ -78,7 +89,12 @@ step "docker compose down -v (wiping Keycloak + MCP volumes)"
 docker compose down -v
 ok "containers + volumes removed"
 
-# 3. docker compose up -d.
+# 3. (optional) rebuild container images, then docker compose up -d.
+if [ "$REBUILD_IMAGES" = "1" ]; then
+  step "docker compose build (REBUILD_IMAGES=1 — rebuilding Keycloak+SPI, auth-channel, hr-mcp)"
+  docker compose build
+  ok "images rebuilt"
+fi
 step "docker compose up -d (fresh start; realm import begins)"
 docker compose up -d
 ok "containers starting"

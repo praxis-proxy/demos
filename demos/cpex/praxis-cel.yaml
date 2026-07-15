@@ -33,7 +33,7 @@ filter_chains:
         # Defaults are fine. Reads body, writes mcp.method / mcp.name
         # into ctx.filter_metadata.
 
-      - filter: cpex
+      - filter: policy
         config_path: ./cpex-cel.yaml
         body_access: read_write
 

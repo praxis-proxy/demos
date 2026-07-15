@@ -162,8 +162,36 @@ plugins:
       timeout_seconds: 5
       default_outbound_header: "Authorization"
 
+  # ----------------------------------------------------------------
+  # Human-in-the-loop: CIBA manager approval.
+  # ----------------------------------------------------------------
+  # Drives an out-of-band approval through OIDC CIBA: the gateway POSTs
+  # a backchannel auth request to Keycloak (login_hint = the approver),
+  # Keycloak pushes a decoupled prompt to the approver's device (the
+  # demo's web approval UI), and the gateway polls until it resolves.
+  # While pending, the gateway emits JSON-RPC -32120 so the agent can
+  # tell the user "awaiting sign-off" and retry — it never blocks.
+  # Registered under the name `manager-approver`; the route names it.
+  - name: manager-approver
+    kind: elicitation/ciba
+    hooks: [elicit]
+    mode: sequential
+    priority: 40
+    on_error: fail
+    config:
+      backchannel_endpoint: "http://localhost:8081/realms/cpex-demo/protocol/openid-connect/ext/ciba/auth"
+      token_endpoint: "http://localhost:8081/realms/cpex-demo/protocol/openid-connect/token"
+      insecure_http: true   # localhost dev — never production
+      client_id: "praxis-gateway"
+      client_secret_source:
+        kind: literal
+        secret: "praxis-gateway-secret"
+      scope: openid
+      approver_claim: preferred_username
+      default_requested_expiry_seconds: 120
+
 global:
-  identity:
+  authentication:
     - jwt-user
     - jwt-client
 
@@ -220,7 +248,7 @@ global:
 
 routes:
   - tool: get_compensation
-    policy:
+    pre_invocation:
       - "require(role.hr)"
       - "delegate(workday-oauth, target: workday-api, audience: workday-api, permissions: [read_compensation])"
       - "taint(secret, session)"
@@ -231,7 +259,7 @@ routes:
       ssn: "str | redact(!perm.view_ssn)"
 
   - tool: search_repos
-    policy:
+    pre_invocation:
       - "require(team.engineering | team.security)"
       - cedar:
           action: 'Action::"read"'
@@ -245,8 +273,20 @@ routes:
       - "run(audit-log)"
 
   - tool: send_email
-    policy:
+    pre_invocation:
       - "require(perm.email_send)"
       - "run(audit-log)"
       - "run(pii-scan)"
       - "security.labels contains \"secret\": deny('external email blocked: this session accessed secret data', 'session_tainted_secret')"
+
+  # Sensitive mutating action. Small changes go straight through; an
+  # adjustment over $10K requires the requester's manager to approve
+  # out-of-band (CIBA), and the approval is bound to the live amount
+  # (`scope`) so it can't be replayed against a larger change.
+  - tool: adjust_compensation
+    pre_invocation:
+      - "require(role.hr)"
+      - when: "args.amount > 10000"
+        do:
+          - "require_approval(manager-approver, from: claim.manager, channel: \"ciba\", scope: \"args.amount <= 25000\", purpose: \"Approve a compensation adjustment\", timeout: 24h)"
+      - "run(audit-log)"

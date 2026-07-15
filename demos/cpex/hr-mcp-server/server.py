@@ -180,12 +180,34 @@ def tool_search_repos(args: dict[str, Any]) -> dict[str, Any]:
     return {"matches": matches, "query": {"repo_name": repo_name, "visibility": visibility}}
 
 
+def tool_adjust_compensation(args: dict[str, Any]) -> dict[str, Any]:
+    # Mutating, sensitive action. The interesting demo property: large
+    # adjustments require a manager's out-of-band approval, enforced by
+    # the gateway's `require_approval(...)` policy BEFORE this code runs.
+    # By the time we get here, the approval (if required) already landed —
+    # the tool just applies the change.
+    employee_id = args.get("employee_id", "")
+    amount = int(args.get("amount", 0))
+    employee = EMPLOYEES.get(employee_id)
+    if not employee:
+        return {"error": f"Employee {employee_id} not found"}
+    employee["salary"] += amount
+    return {
+        "status": "applied",
+        "employee_id": employee["employee_id"],
+        "name": employee["name"],
+        "adjustment": amount,
+        "new_salary": employee["salary"],
+    }
+
+
 TOOLS = {
     "get_compensation": tool_get_compensation,
     "send_email": tool_send_email,
     "display_compensation": tool_display_compensation,
     "get_directory": tool_get_directory,
     "search_repos": tool_search_repos,
+    "adjust_compensation": tool_adjust_compensation,
 }
 
 # ---------------------------------------------------------------------------

@@ -69,9 +69,9 @@ a scoped request to the MCP tool. In a single pass it:
 +------------------------------------------------------------------+
 | host                                                             |
 |                                                                  |
-|   praxis (--features cpex)   :8090                               |
+|   cpex-praxis gateway (praxis-ai + policy)   :8090               |
 |     filter: mcp            parse JSON-RPC, set mcp.method/name   |
-|     filter: cpex           identity + APL + PDP + delegation +   |
+|     filter: policy         identity + APL + PDP + delegation +   |
 |                            PII + audit + taint + body rewrite    |
 |     filter: router         forward / to the hr-mcp upstream      |
 |     filter: load_balancer  single-endpoint cluster               |
@@ -104,7 +104,8 @@ a scoped request to the MCP tool. In a single pass it:
 starts the gateway, and smoke-tests scenario 01. The whole demo is one command:
 
 ```bash
-# From this directory. First run builds praxis (~5 min cold, ~30s warm).
+# From this directory. First run builds the gateway (~5 min cold, ~30s warm).
+# Point it at a praxis checkout: PRAXIS_DIR=<path> or PRAXIS_GIT_URL=<url>.
 ./restart.sh
 ./walkthrough.sh
 ```
@@ -112,35 +113,44 @@ starts the gateway, and smoke-tests scenario 01. The whole demo is one command:
 The equivalent steps, spelled out:
 
 ```bash
-GATEWAY_BIN="$(./build-praxis.sh)"   # build the cpex gateway, print its path
-docker compose up -d                 # Keycloak + mock MCP server + valkey
-./verify-token-exchange.sh           # wait for the realm import, check STE v2
-"$GATEWAY_BIN" -c ./praxis.yaml &     # start the gateway
-./walkthrough.sh                     # narrated tour of the core scenarios
+GATEWAY_BIN="$(./build-gateway.sh)"   # build the cpex gateway, print its path
+docker compose up -d                  # Keycloak + mock MCP server + valkey
+./verify-token-exchange.sh            # wait for the realm import, check STE v2
+"$GATEWAY_BIN" -c ./praxis.yaml &      # start the gateway
+./walkthrough.sh                      # narrated tour of the core scenarios
 ```
 
-## Configuring the praxis source
+## Configuring the gateway / praxis source
 
-Praxis is not vendored here. `build-praxis.sh` resolves where to get it (first
-match wins):
+The gateway is a thin crate (`gateway/`) that composes **praxis-ai**'s AI filters
+(the `mcp` protocol classifier) with the **CPEX/HIL `policy`** filter: it depends
+on praxis-ai's server, enables the `cpex-policy-engine` feature (which registers
+`policy`), and `[patch]`es `praxis-proxy-*` to our HIL fork. `build-gateway.sh`
+builds it, resolving the fork into the gitignored `gateway/.praxis` (first match
+wins):
 
 | Env var | Effect |
 |---|---|
-| `PRAXIS_BIN` | Path to an already-built praxis binary. Used as-is, no build. |
-| `PRAXIS_DIR` | Path to a praxis checkout. Built in place with `--features cpex`. |
-| `PRAXIS_GIT_URL` (+ `PRAXIS_GIT_REF`) | Clone this URL at the given branch, tag, or commit into `PRAXIS_SRC` (default `.praxis-src/`), then build. |
-| default | A sibling `../../../praxis` checkout if present, otherwise clone the public repo at `PRAXIS_GIT_REF` (default `main`). |
+| `PRAXIS_DIR` | Path to a local praxis checkout — symlinked as `gateway/.praxis`. |
+| `PRAXIS_GIT_URL` (+ `PRAXIS_GIT_REF`, default `feat/hil_apl`) | Cloned into `gateway/.praxis`. |
+| existing `gateway/.praxis` | Reused as-is. |
+
+> The HIL (elicitation / CIBA approval) demo needs the `feat/hil_apl` branch — it
+> carries the `policy`-filter changes base `main` doesn't. Point `PRAXIS_DIR` at
+> a checkout on that branch, or set `PRAXIS_GIT_URL`.
 
 ```bash
-# Build a specific upstream commit from git:
-PRAXIS_GIT_URL=https://github.com/praxis-proxy/praxis.git \
-PRAXIS_GIT_REF=feat/cpex \
-./restart.sh
-
-# Or point at a local checkout or a prebuilt binary:
+# From a local praxis checkout:
 PRAXIS_DIR=~/src/praxis ./restart.sh
-PRAXIS_BIN=~/src/praxis/target/release/praxis ./restart.sh
+
+# Or clone a ref from git:
+PRAXIS_GIT_URL=https://github.com/terylt/praxis.git PRAXIS_GIT_REF=feat/hil_apl ./restart.sh
+
+# GATEWAY_PROFILE=debug for a faster build; GATEWAY_BIN=<path> to skip building.
 ```
+
+> Once the HIL changes land upstream, drop the `[patch]` in `gateway/Cargo.toml`
+> and the gateway builds against published praxis directly.
 
 ## Scenarios
 
@@ -277,15 +287,17 @@ the padding, so the wire stays correct. This is documented in the filter source.
 | `verify-token-exchange.sh` | Check that STE v2 is configured correctly |
 | `walkthrough.sh` | Narrated tour of the core scenarios |
 | `restart.sh` | Tear down, bring up, and smoke-test the demo |
-| `build-praxis.sh` | Resolve and build the praxis-cpex gateway (see "Configuring the praxis source") |
+| `build-gateway.sh` | Build the gateway from `gateway/` (see "Configuring the gateway / praxis source") |
+| `gateway/` | Thin binary composing praxis-ai's AI filters + the CPEX/HIL `policy` filter |
 | `agent/` | Optional Python chat agent for an LLM-driven demo |
 
 ## Where the filter lives
 
-The `cpex` filter source is in the praxis repository at
-[`filter/src/builtins/http/security/cpex/`](https://github.com/praxis-proxy/praxis/tree/main/filter/src/builtins/http/security/cpex),
-behind the `cpex` Cargo feature on `praxis-proxy-filter`. That feature registers
-both the Cedar (`apl-pdp-cedar-direct`) and CEL (`apl-pdp-cel`) PDP backends, so
-one binary serves both `cpex.yaml` and `cpex-cel.yaml`. See the filter's own
-README there for configuration and internals.
+The filter source is in the praxis repository at
+[`filter/src/builtins/http/security/policy/`](https://github.com/praxis-proxy/praxis/tree/main/filter/src/builtins/http/security/policy),
+behind the `cpex-policy-engine` Cargo feature on `praxis-proxy-filter` (registered
+under the YAML filter name `policy`). That feature registers both the Cedar
+(`apl-pdp-cedar-direct`) and CEL (`apl-pdp-cel`) PDP backends, so one binary
+serves both `cpex.yaml` and `cpex-cel.yaml`. See the filter's own module docs
+there for configuration and internals.
 

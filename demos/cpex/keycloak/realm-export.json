@@ -13,17 +13,23 @@
   "ssoSessionIdleTimeout": 14400,
   "ssoSessionMaxLifespan": 57600,
   "defaultSignatureAlgorithm": "RS256",
-
   "roles": {
     "realm": [
-      { "name": "hr",        "description": "HR staff" },
-      { "name": "engineer",  "description": "Engineering staff" },
-      { "name": "auditor",   "description": "Compliance auditors" }
+      {
+        "name": "hr",
+        "description": "HR staff"
+      },
+      {
+        "name": "engineer",
+        "description": "Engineering staff"
+      },
+      {
+        "name": "auditor",
+        "description": "Compliance auditors"
+      }
     ]
   },
-
   "groups": [],
-
   "users": [
     {
       "username": "alice",
@@ -33,14 +39,28 @@
       "enabled": true,
       "emailVerified": true,
       "credentials": [
-        { "type": "password", "value": "alice", "temporary": false }
+        {
+          "type": "password",
+          "value": "alice",
+          "temporary": false
+        }
       ],
-      "realmRoles": ["engineer"],
+      "realmRoles": [
+        "engineer"
+      ],
       "attributes": {
-        "permissions": ["tool_execute"],
-        "teams": ["engineering"],
-        "groups": ["engineering"],
-        "gh_permissions": ["repo:read:internal"]
+        "permissions": [
+          "tool_execute"
+        ],
+        "teams": [
+          "engineering"
+        ],
+        "groups": [
+          "engineering"
+        ],
+        "gh_permissions": [
+          "repo:read:internal"
+        ]
       }
     },
     {
@@ -51,14 +71,32 @@
       "enabled": true,
       "emailVerified": true,
       "credentials": [
-        { "type": "password", "value": "bob", "temporary": false }
+        {
+          "type": "password",
+          "value": "bob",
+          "temporary": false
+        }
       ],
-      "realmRoles": ["hr"],
+      "realmRoles": [
+        "hr"
+      ],
       "attributes": {
-        "permissions": ["tool_execute", "view_ssn", "pii_access", "email_send"],
-        "teams": ["hr"],
-        "groups": ["hr"],
-        "gh_permissions": []
+        "permissions": [
+          "tool_execute",
+          "view_ssn",
+          "pii_access",
+          "email_send"
+        ],
+        "teams": [
+          "hr"
+        ],
+        "groups": [
+          "hr"
+        ],
+        "gh_permissions": [],
+        "manager": [
+          "alice"
+        ]
       }
     },
     {
@@ -69,13 +107,26 @@
       "enabled": true,
       "emailVerified": true,
       "credentials": [
-        { "type": "password", "value": "charlie", "temporary": false }
+        {
+          "type": "password",
+          "value": "charlie",
+          "temporary": false
+        }
       ],
-      "realmRoles": ["auditor"],
+      "realmRoles": [
+        "auditor"
+      ],
       "attributes": {
-        "permissions": ["tool_execute", "pii_access"],
-        "teams": ["compliance"],
-        "groups": ["compliance"],
+        "permissions": [
+          "tool_execute",
+          "pii_access"
+        ],
+        "teams": [
+          "compliance"
+        ],
+        "groups": [
+          "compliance"
+        ],
         "gh_permissions": []
       }
     },
@@ -87,18 +138,29 @@
       "enabled": true,
       "emailVerified": true,
       "credentials": [
-        { "type": "password", "value": "eve", "temporary": false }
+        {
+          "type": "password",
+          "value": "eve",
+          "temporary": false
+        }
       ],
-      "realmRoles": ["hr"],
+      "realmRoles": [
+        "hr"
+      ],
       "attributes": {
-        "permissions": ["tool_execute"],
-        "teams": ["hr"],
-        "groups": ["hr"],
+        "permissions": [
+          "tool_execute"
+        ],
+        "teams": [
+          "hr"
+        ],
+        "groups": [
+          "hr"
+        ],
         "gh_permissions": []
       }
     }
   ],
-
   "clientScopes": [
     {
       "name": "read_compensation",
@@ -119,7 +181,6 @@
       }
     }
   ],
-
   "clients": [
     {
       "clientId": "hr-copilot",
@@ -133,8 +194,12 @@
       "serviceAccountsEnabled": true,
       "standardFlowEnabled": false,
       "implicitFlowEnabled": false,
-      "redirectUris": ["*"],
-      "webOrigins": ["*"],
+      "redirectUris": [
+        "*"
+      ],
+      "webOrigins": [
+        "*"
+      ],
       "attributes": {
         "access.token.lifespan": "600"
       },
@@ -249,13 +314,27 @@
             "id.token.claim": "false",
             "access.token.claim": "true"
           }
+        },
+        {
+          "name": "manager-claim",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "manager",
+            "claim.name": "manager",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
         }
       ]
     },
     {
       "clientId": "praxis-gateway",
       "name": "Praxis Gateway",
-      "description": "Praxis-CPEX gateway — RFC 8693 token-exchange client.",
+      "description": "Praxis-CPEX gateway \u2014 RFC 8693 token-exchange client.",
       "enabled": true,
       "protocol": "openid-connect",
       "publicClient": false,
@@ -269,9 +348,13 @@
       "attributes": {
         "access.token.lifespan": "600",
         "standard.token.exchange.enabled": "true",
-        "standard.token.exchange.audiences": "workday-api,github-api"
+        "standard.token.exchange.audiences": "workday-api,github-api",
+        "oidc.ciba.grant.enabled": "true"
       },
-      "optionalClientScopes": ["read_compensation", "repo:read:internal"],
+      "optionalClientScopes": [
+        "read_compensation",
+        "repo:read:internal"
+      ],
       "protocolMappers": [
         {
           "name": "sub",
@@ -326,7 +409,7 @@
     {
       "clientId": "github-api",
       "name": "GitHub API (downstream audience)",
-      "description": "Internal GitHub Enterprise — token-exchange audience. Pattern 3 (per-audience mapper).",
+      "description": "Internal GitHub Enterprise \u2014 token-exchange audience. Pattern 3 (per-audience mapper).",
       "enabled": true,
       "protocol": "openid-connect",
       "publicClient": false,
@@ -357,7 +440,7 @@
     {
       "clientId": "workday-api",
       "name": "Workday API (downstream audience)",
-      "description": "Workday API — token-exchange audience for the workday flow.",
+      "description": "Workday API \u2014 token-exchange audience for the workday flow.",
       "enabled": true,
       "protocol": "openid-connect",
       "publicClient": false,
@@ -368,5 +451,11 @@
       "standardFlowEnabled": false,
       "implicitFlowEnabled": false
     }
-  ]
+  ],
+  "attributes": {
+    "cibaBackchannelTokenDeliveryMode": "poll",
+    "cibaExpiresIn": "1800",
+    "cibaInterval": "5",
+    "cibaAuthRequestedUserHint": "login_hint"
+  }
 }
