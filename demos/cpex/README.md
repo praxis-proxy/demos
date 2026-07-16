@@ -25,7 +25,7 @@ CPEX/APL (Authorization Policy Logic) stack:
 
 The following demo shows an interactive session in front of the gateway, driven by an LLM agent. It covers allow with RFC 8693 token exchange, on-the-wire SSN redaction, session taint, a CEL PDP decision, and a human-in-the-loop manager approval, with the governing policy shown alongside each step.
 
-[![CPEX-Praxis HR assistant demo](https://asciinema.org/a/1260925.svg)](https://asciinema.org/a/1260925)
+[![CPEX-Praxis HR assistant demo](https://asciinema.org/a/NsnafpaR7xzyjm7a.svg)](https://asciinema.org/a/NsnafpaR7xzyjm7a)
 
 ## Scenario
 
