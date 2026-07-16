@@ -450,6 +450,19 @@ def record(no_cleanup: bool = False) -> int:
     tmux("split-window", "-v", "-t", SESSION, "-l", str(CHAT_ROWS))
     top, bottom = pane_ids()
 
+    # Position + quiet both panes BEFORE recording, so none of this setup (nor
+    # any absolute home path) is captured. Policy pane: blank prompt, no input
+    # echo → only the spotlight boxes show. Chat pane: cd'd into AGENT_DIR with a
+    # short prompt (echo kept on so typed prompts stay visible), so the launch
+    # line is short and free of a /Users home path.
+    send_line(top, "stty -echo; PS1=''; clear")
+    send_line(bottom, f"cd {AGENT_DIR}; PS1='$ '; clear")
+    time.sleep(0.8)
+    # Relative interpreter so the recording shows `.venv/bin/python`, not an
+    # absolute home path (falls back to absolute if it's outside AGENT_DIR).
+    _rel = os.path.relpath(sys.executable, AGENT_DIR)
+    py = _rel if not _rel.startswith("..") else sys.executable
+
     # asciinema records the tmux window headlessly (no controlling tty needed)
     # at a fixed size, so this runs the same from an automation context or a
     # real terminal. asciicast-v2 keeps agg + the trim logic happy.
@@ -463,9 +476,9 @@ def record(no_cleanup: bool = False) -> int:
     try:
         # Intro spotlight in the top pane.
         send_line(top, f"clear; {sys.executable} {SELF} spotlight allow")
-        # Launch the assistant in the bottom pane.
-        send_line(bottom, f"cd {AGENT_DIR} && DEMO_MODEL={DEMO_MODEL} "
-                          f"{sys.executable} chat.py --persona bob --gateway {GATEWAY}")
+        # Launch the assistant in the bottom pane (already in AGENT_DIR).
+        send_line(bottom, f"DEMO_MODEL={DEMO_MODEL} {py} chat.py "
+                          f"--persona bob --gateway {GATEWAY}")
         if not wait_for_text(bottom, BANNER_MARKER, timeout=40):
             print("chat.py banner never appeared — see the pane / logs.")
             return 1
