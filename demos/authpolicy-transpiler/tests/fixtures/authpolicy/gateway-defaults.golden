@@ -1,0 +1,54 @@
+# == CPEX policy document ==
+plugin_settings:
+  routing_enabled: true
+plugins:
+- name: jwt-internal
+  kind: identity/jwt
+  hooks:
+  - identity.resolve
+  on_error: fail
+  config:
+    role: user
+    header: Authorization
+    trusted_issuers:
+    - issuer: ''
+      algorithms:
+      - RS256
+      decoding_key:
+        kind: jwks_url
+        url: https://sso.internal.example.com/jwks
+    claim_mapper: standard
+global:
+  authentication:
+  - jwt-internal
+  authorization:
+    pre_invocation:
+    - require(authenticated)
+    - cel:
+        expr: '!((http.host.endsWith(''.internal.example.com''))) || (((claim.email_verified == true)))'
+  pdp:
+  - kind: cel
+
+# == Praxis filter block ==
+filter: policy
+config_path: /etc/praxis/gateway-defaults-cpex-policy.yaml
+
+# == Coverage report ==
+AuthPolicy → Praxis coverage report
+===================================
+translated: 3   approximated: 1   skipped: 3
+
+[INFO ] skipped       spec.targetRef
+          Gateway API binding is not translated; wire the emitted filter block into a Praxis chain manually.
+[WARN ] approximated  spec.defaults/overrides
+          defaults/overrides hierarchy is not resolved; translated as a single flat policy.
+[INFO ] translated    authentication/jwt-internal
+          JWT → identity/jwt (role: user; algorithms default to RS256 — widen in the emitted policy if the IdP signs with ES256/etc.).
+[INFO ] translated    authorization/email-verified
+          patternMatching → CEL PDP step (`cel: { expr }`).
+[WARN ] skipped       metadata/user-profile
+          external metadata fetch is not translated this iteration (best-effort APL bridge is Phase B).
+[WARN ] skipped       callbacks/audit-log
+          post-auth callbacks are not translated this iteration (best-effort APL bridge is Phase B).
+[INFO ] translated    spec.when
+          policy activation condition folded into the global policy steps.

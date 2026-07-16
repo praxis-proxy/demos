@@ -1,0 +1,57 @@
+# Clean-translating AuthPolicy → generic-HTTP (L7) CEL authorization.
+#
+# Every construct maps 1:1 to CPEX with no approximation or skip (only the
+# inherent, expected `spec.targetRef` INFO note), so the emitted CPEX policy +
+# Praxis filter block run end-to-end. See the e2e/ directory for the
+# runnable harness (Keycloak + Praxis + echo backend).
+#
+# CEL / RBAC demonstrated (over top-level identity claims + the HTTP request
+# line, all namespaces CPEX's standard claim mapper actually populates):
+#   - reads  (GET)          require the `tool_execute` permission
+#       'tool_execute' in auth.identity.permissions  ->  has(perm.tool_execute) && perm.tool_execute
+#   - writes (POST/DELETE)  require the `hr` role
+#       'hr' in auth.identity.roles                   ->  has(role.hr) && role.hr
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: jwt-cel-http
+  namespace: default
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: api-route
+  when:
+    - predicate: "request.path.startsWith('/api')"
+  rules:
+    authentication:
+      keycloak-jwt:
+        jwt:
+          # Explicit JWKS endpoint alongside issuerUrl. jwksUrl gives the key
+          # URL (so identity translates cleanly, no OIDC-discovery
+          # approximation); issuerUrl populates the `iss` the token must carry.
+          # Both point at the demos/cpex Keycloak `cpex-demo` realm.
+          issuerUrl: "http://localhost:8081/realms/cpex-demo"
+          jwksUrl: "http://localhost:8081/realms/cpex-demo/protocol/openid-connect/certs"
+        credentials:
+          authorizationHeader:
+            prefix: Bearer
+    authorization:
+      reads-need-tool-execute:
+        when:
+          - predicate: "request.method == 'GET'"
+        patternMatching:
+          patterns:
+            - predicate: "'tool_execute' in auth.identity.permissions"
+      writes-need-hr:
+        when:
+          - any:
+              - predicate: "request.method == 'POST'"
+              - predicate: "request.method == 'DELETE'"
+        patternMatching:
+          patterns:
+            - predicate: "'hr' in auth.identity.roles"
+    # No custom `response.denyWith` block: the transpiler does not yet carry
+    # denyWith into the emitted CPEX policy (reported as approximated), so
+    # omitting it keeps this example a fully clean translation. An
+    # authorization denial returns Praxis's default L7 deny (HTTP 403).

@@ -1,0 +1,39 @@
+# Self-contained IdP for the AuthPolicy → CEL end-to-end run.
+#
+# Brings up ONLY Keycloak (the `cpex-demo` realm) — the OIDC issuer whose
+# JWKS the transpiled policy validates against, and whose persona users
+# (alice, bob, …) mint-token.sh signs tokens for. Praxis itself runs on the
+# host (built by ./build-praxis.sh), not in compose, so you can rebuild and
+# re-run the gateway without touching IdP state.
+#
+#   docker compose up -d      # start Keycloak (realm auto-imported)
+#   docker compose down -v    # tear down (loses Keycloak state)
+#
+# Note: binds host port 8081 and imports the `cpex-demo` realm — the same as
+# the sibling `cpex` demo. Run only one of them at a time.
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.2
+    container_name: authpolicy-demo-keycloak
+    command:
+      - start-dev
+      - --import-realm
+      - --http-port=8081
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HOSTNAME: localhost
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
+    volumes:
+      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+    ports:
+      - "8081:8081"
+    healthcheck:
+      # Keycloak 26 ships no curl/wget; probe the realm endpoint over raw TCP.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8081 && echo -e 'GET /realms/cpex-demo HTTP/1.0\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q ' 200 '"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s

@@ -1,0 +1,60 @@
+# == CPEX policy document ==
+plugin_settings:
+  routing_enabled: true
+plugins:
+- name: keycloak-jwt
+  kind: identity/jwt
+  hooks:
+  - identity.resolve
+  on_error: fail
+  config:
+    role: user
+    header: Authorization
+    trusted_issuers:
+    - issuer: https://keycloak.example.com/realms/myrealm
+      algorithms:
+      - RS256
+      decoding_key:
+        kind: jwks_url
+        url: https://keycloak.example.com/realms/myrealm
+    claim_mapper: standard
+global:
+  authentication:
+  - keycloak-jwt
+  authorization:
+    pre_invocation:
+    - require(authenticated)
+    - cel:
+        expr: '!((!http.path.startsWith(''/public''))) || (!((http.method == ''GET'')) || (((''admin'' in claim.realm_access.roles)) && (claim.email_verified)))'
+    - cel:
+        expr: '!((!http.path.startsWith(''/public''))) || (!(((http.method == ''POST'') || (http.method == ''DELETE''))) || (((''admin'' in claim.realm_access.roles))))'
+  pdp:
+  - kind: cel
+
+# == Praxis filter block ==
+filter: policy
+config_path: /etc/praxis/jwt-rbac-cpex-policy.yaml
+
+# == Coverage report ==
+AuthPolicy → Praxis coverage report
+===================================
+translated: 4   approximated: 4   skipped: 1
+
+[INFO ] skipped       spec.targetRef
+          Gateway API binding is not translated; wire the emitted filter block into a Praxis chain manually.
+[INFO ] translated    authentication/keycloak-jwt
+          JWT → identity/jwt (role: user; algorithms default to RS256 — widen in the emitted policy if the IdP signs with ES256/etc.).
+[WARN ] approximated  authentication/keycloak-jwt
+          issuerUrl maps to OIDC discovery, which CPEX identity/jwt does not perform; set decoding_key.url to the IdP's JWKS endpoint.
+[INFO ] translated    authorization/members-can-read
+          patternMatching → CEL PDP step (`cel: { expr }`).
+[INFO ] translated    authorization/writes-need-admin
+          patternMatching → CEL PDP step (`cel: { expr }`).
+[WARN ] approximated  authentication (claims)
+          a rule references a nested identity claim (e.g. Keycloak realm_access.roles); the `standard` claim mapper does not surface nested claims as usable keys (needs Phase B U14).
+[WARN ] approximated  response.unauthenticated
+          custom unauthenticated denyWith (status/body/headers) is not carried; identity failure returns a default 401 until Phase B (U2/U7).
+[WARN ] approximated  response.unauthorized
+          custom unauthorized denyWith (status/body/headers) is not carried; authz denial uses a default status until Phase B (U2/U7).
+[INFO ] translated    spec.when
+          policy activation condition folded into the global policy steps.

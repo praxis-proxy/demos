@@ -1,0 +1,31 @@
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: apikey-opa
+  namespace: default
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: secure-route
+  rules:
+    authentication:
+      api-key-users:
+        apiKey:
+          selector:
+            matchLabels:
+              app: my-api
+        credentials:
+          customHeader:
+            name: X-API-Key
+    authorization:
+      tier-check:
+        opa:
+          rego: |
+            allow { input.auth.identity.metadata.labels.tier == "premium" }
+    response:
+      unauthenticated:
+        code: 302
+        headers:
+          Location:
+            expression: "'https://portal.example.com/signup'"

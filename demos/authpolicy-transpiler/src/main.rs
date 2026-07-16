@@ -1,0 +1,384 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2024 Praxis Contributors
+
+//! `authpolicy-transpiler` — offline CLI that converts a Kuadrant
+//! `AuthPolicy` into a Praxis `policy`-filter block + a CPEX policy document.
+//!
+//! Reads one or more `AuthPolicy` YAML files (each may hold several `---`
+//! documents) and, per policy, emits a CPEX policy document, a Praxis
+//! `policy` filter block, and a coverage report. With no `--out-dir` the
+//! artifacts go to stdout with section headers; otherwise they are written
+//! as files. The process exits non-zero if any policy's coverage report
+//! contains a FATAL entry (fail-closed) so a fail-open fragment is never
+//! produced silently.
+
+mod authpolicy;
+
+use std::path::{Path, PathBuf};
+
+use clap::Parser;
+
+use crate::authpolicy::{model, translate};
+
+fn main() {
+    run(&Args::parse());
+}
+
+// -----------------------------------------------------------------------------
+// CLI Arguments
+// -----------------------------------------------------------------------------
+
+/// CLI arguments for the `authpolicy-transpiler` binary.
+#[derive(Parser)]
+#[command(long_about = "Transpile Kuadrant AuthPolicy resources into a Praxis \
+                  policy-filter block + a CPEX policy document, best-effort, \
+                  with a coverage report.\n\n\
+                  Exits non-zero if any policy fails closed (authorization \
+                  declared but not translatable).")]
+pub(crate) struct Args {
+    /// One or more `AuthPolicy` YAML files. Each may contain multiple
+    /// `---`-separated documents.
+    #[arg(required = true)]
+    inputs: Vec<PathBuf>,
+
+    /// Write artifacts to this directory instead of stdout. Per policy:
+    /// `<slug>-cpex-policy.yaml`, `<slug>-policy-filter.yaml`,
+    /// `<slug>-coverage.txt`.
+    #[arg(long)]
+    out_dir: Option<PathBuf>,
+}
+
+// -----------------------------------------------------------------------------
+// Entry Point
+// -----------------------------------------------------------------------------
+
+/// Transpile every input file; exit non-zero on IO/parse error or a
+/// fail-closed coverage report.
+pub(crate) fn run(args: &Args) {
+    if let Some(dir) = args.out_dir.as_ref()
+        && let Err(e) = std::fs::create_dir_all(dir)
+    {
+        eprintln!(
+            "fatal: cannot create output directory {}: {e}",
+            dir.display()
+        );
+        std::process::exit(1);
+    }
+
+    let mut any_fatal = false;
+    let mut any_error = false;
+
+    for input in &args.inputs {
+        match transpile_file(input, args.out_dir.as_deref()) {
+            Ok(had_fatal) => any_fatal |= had_fatal,
+            Err(e) => {
+                eprintln!("error: {}: {e}", input.display());
+                any_error = true;
+            }
+        }
+    }
+
+    if any_error {
+        std::process::exit(1);
+    }
+    if any_fatal {
+        eprintln!(
+            "\nauthpolicy-transpiler: one or more policies failed closed (FATAL coverage). \
+             The emitted policy denies by default; review before use."
+        );
+        std::process::exit(1);
+    }
+}
+
+/// Transpile one file. Returns whether any policy in it failed closed.
+fn transpile_file(input: &Path, out_dir: Option<&Path>) -> Result<bool, String> {
+    let yaml = std::fs::read_to_string(input).map_err(|e| format!("read failed: {e}"))?;
+    let policies = model::parse_documents(&yaml).map_err(|e| e.to_string())?;
+
+    if policies.is_empty() {
+        return Err("no AuthPolicy documents found".to_owned());
+    }
+
+    let file_stem = input
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("authpolicy");
+    let multi = policies.len() > 1;
+    let mut had_fatal = false;
+
+    for (idx, policy) in policies.iter().enumerate() {
+        let slug = policy_slug(policy, file_stem, idx, multi);
+        let out = translate::transpile(policy, &slug);
+        had_fatal |= out.report.has_fatal();
+
+        match out_dir {
+            Some(dir) => write_artifacts(dir, &slug, &out)?,
+            None => print_artifacts(&slug, &out),
+        }
+    }
+    Ok(had_fatal)
+}
+
+/// Derive a filesystem-safe slug for a policy's output artifacts.
+fn policy_slug(policy: &model::AuthPolicy, file_stem: &str, idx: usize, multi: bool) -> String {
+    let base = policy.metadata.name.clone().unwrap_or_else(|| {
+        if multi {
+            format!("{file_stem}-{idx}")
+        } else {
+            file_stem.to_owned()
+        }
+    });
+    let slug: String = base
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    if slug.is_empty() {
+        "authpolicy".to_owned()
+    } else {
+        slug
+    }
+}
+
+/// Header comment prepended to an emitted CPEX policy document.
+fn cpex_header(slug: &str) -> String {
+    format!(
+        "# Generated by `authpolicy-transpiler` for policy `{slug}`.\n\
+         # Authorization is emitted as the CPEX `global` policy (canonical\n\
+         # authentication/authorization block form). Because it declares only a\n\
+         # `global` HTTP policy (no entity routes), Praxis authorizes it at the\n\
+         # HTTP layer for generic (non-MCP) requests. Review the coverage report\n\
+         # before use.\n"
+    )
+}
+
+/// Header comment prepended to an emitted Praxis filter block.
+fn filter_header() -> &'static str {
+    "# Praxis `policy` filter block — add to a listener's filter chain.\n\
+     # The filter derives HTTP-layer authorization from the emitted\n\
+     # `global`-only policy. Point `config_path` at the emitted CPEX document.\n"
+}
+
+/// Write the three artifacts for one policy into `dir`.
+fn write_artifacts(dir: &Path, slug: &str, out: &translate::Transpiled) -> Result<(), String> {
+    let write = |suffix: &str, body: String| -> Result<(), String> {
+        let path = dir.join(format!("{slug}-{suffix}"));
+        std::fs::write(&path, body).map_err(|e| format!("write {} failed: {e}", path.display()))
+    };
+    write(
+        "cpex-policy.yaml",
+        format!("{}{}", cpex_header(slug), out.cpex_doc),
+    )?;
+    write(
+        "policy-filter.yaml",
+        format!("{}{}", filter_header(), out.filter_block),
+    )?;
+    write("coverage.txt", out.report.render())?;
+    println!(
+        "transpiled `{slug}` → {}/{slug}-{{cpex-policy.yaml,policy-filter.yaml,coverage.txt}}",
+        dir.display()
+    );
+    Ok(())
+}
+
+/// Print the three artifacts for one policy to stdout with section headers.
+fn print_artifacts(slug: &str, out: &translate::Transpiled) {
+    println!("# ===== policy: {slug} =====\n");
+    println!("# --- CPEX policy document ({slug}-cpex-policy.yaml) ---");
+    print!("{}", cpex_header(slug));
+    println!("{}", out.cpex_doc);
+    println!("# --- Praxis filter block ({slug}-policy-filter.yaml) ---");
+    print!("{}", filter_header());
+    println!("{}", out.filter_block);
+    println!("# --- Coverage report ---");
+    println!("{}", out.report.render());
+}
+
+// -----------------------------------------------------------------------------
+// Golden tests (U11)
+// -----------------------------------------------------------------------------
+//
+// Each corpus AuthPolicy under `tests/fixtures/authpolicy/<name>.yaml` is
+// transpiled and compared against a committed `<name>.golden`. Set
+// `AUTHPOLICY_BLESS=1` to regenerate the golden files after an intentional
+// change. Invariant assertions guard against a wrong bless silently passing.
+
+#[cfg(test)]
+mod golden_tests {
+    #![allow(
+        clippy::panic,
+        clippy::indexing_slicing,
+        reason = "panic and indexing are idiomatic in test assertions"
+    )]
+
+    use crate::authpolicy::{model, translate};
+
+    const FIXTURES: [&str; 4] = ["jwt-rbac", "apikey-opa", "gateway-defaults", "jwt-cel-http"];
+
+    fn fixture_dir() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/authpolicy")
+    }
+
+    fn transpile_fixture(name: &str) -> translate::Transpiled {
+        let yaml = std::fs::read_to_string(fixture_dir().join(format!("{name}.yaml")))
+            .unwrap_or_else(|e| panic!("read {name}.yaml: {e}"));
+        let policies = model::parse_documents(&yaml).expect("parse corpus");
+        assert_eq!(policies.len(), 1, "corpus fixtures hold one document");
+        translate::transpile(&policies[0], name)
+    }
+
+    fn combined(out: &translate::Transpiled) -> String {
+        format!(
+            "# == CPEX policy document ==\n{}\n# == Praxis filter block ==\n{}\n# == Coverage report ==\n{}",
+            out.cpex_doc,
+            out.filter_block,
+            out.report.render()
+        )
+    }
+
+    #[test]
+    fn corpus_matches_golden() {
+        let bless = std::env::var_os("AUTHPOLICY_BLESS").is_some();
+        for name in FIXTURES {
+            let out = transpile_fixture(name);
+            let actual = combined(&out);
+            let golden_path = fixture_dir().join(format!("{name}.golden"));
+            if bless {
+                std::fs::write(&golden_path, &actual).expect("write golden");
+                continue;
+            }
+            let expected = std::fs::read_to_string(&golden_path).unwrap_or_else(|e| {
+                panic!("read {name}.golden: {e} (run with AUTHPOLICY_BLESS=1 to create)")
+            });
+            assert_eq!(
+                actual, expected,
+                "golden mismatch for `{name}` (AUTHPOLICY_BLESS=1 to update)"
+            );
+        }
+    }
+
+    // This demo validates its output with the golden corpus plus the
+    // structural invariant assertions below, keeping its dependency surface
+    // to serde/serde_yaml/clap. It does not parse the emitted documents
+    // through the CPEX crate.
+
+    #[test]
+    fn invariants_guard_the_golden() {
+        // jwt-rbac: JWT + CEL authz translate; not fail-closed.
+        let rbac = transpile_fixture("jwt-rbac");
+        assert!(rbac.cpex_doc.contains("kind: identity/jwt"));
+        // Quote-agnostic: serde_yaml single-quotes the `!(`-leading cel expr
+        // scalar and doubles the inner quotes (`''admin''`).
+        assert!(rbac.cpex_doc.contains("in claim.realm_access.roles"));
+        assert!(rbac.cpex_doc.contains("http.method =="));
+        assert!(!rbac.report.has_fatal(), "jwt-rbac should not fail closed");
+
+        // Kuadrant CEL predicates emit as `cel:` PDP steps, gated by a native
+        // `require(authenticated)` presence check — never `require(<CEL>)`.
+        assert!(
+            rbac.cpex_doc.contains("cel:"),
+            "authz predicates emit as cel: steps"
+        );
+        assert!(
+            rbac.cpex_doc.contains("kind: cel"),
+            "a cel: step must declare the cel PDP resolver or it fails closed at runtime"
+        );
+        assert!(
+            rbac.cpex_doc.contains("require(authenticated)"),
+            "JWT identity → require(authenticated) presence gate"
+        );
+        assert!(
+            !rbac.cpex_doc.contains("require(http.method") && !rbac.cpex_doc.contains("require((("),
+            "comparisons/CEL belong in cel: steps, not require(...);\n{}",
+            rbac.cpex_doc
+        );
+
+        // Canonical CPEX block form: `authentication:` + `authorization:`
+        // with `pre_invocation:`, never the legacy keys (which CPEX rejects).
+        assert!(
+            rbac.cpex_doc.contains("authentication:"),
+            "canonical authentication block expected"
+        );
+        assert!(
+            rbac.cpex_doc.contains("authorization:"),
+            "canonical authorization block expected"
+        );
+        assert!(
+            rbac.cpex_doc.contains("pre_invocation:"),
+            "canonical pre_invocation block expected"
+        );
+        for legacy in [
+            "\npolicy:",
+            "  policy:",
+            "post_policy:",
+            "\nidentity:",
+            "  identity:",
+        ] {
+            assert!(
+                !rbac.cpex_doc.contains(legacy),
+                "must not emit legacy key `{}`",
+                legacy.trim()
+            );
+        }
+
+        // apikey-opa: only authz is OPA (unsupported) → fail-closed deny-all.
+        let opa = transpile_fixture("apikey-opa");
+        assert!(opa.report.has_fatal(), "OPA-only authz must fail closed");
+        assert!(opa.cpex_doc.contains("require(false)"));
+        // Fail-closed uses a native require(false), not a cel: step, so no
+        // cel PDP resolver is declared.
+        assert!(
+            !opa.cpex_doc.contains("kind: cel"),
+            "fail-closed require(false) needs no cel resolver"
+        );
+
+        // gateway-defaults: defaults block + jwksUrl jwt + email-verified authz.
+        let gw = transpile_fixture("gateway-defaults");
+        assert!(gw.cpex_doc.contains("kind: identity/jwt"));
+        assert!(gw.cpex_doc.contains("claim.email_verified =="));
+        assert!(
+            gw.report
+                .entries
+                .iter()
+                .any(|e| e.construct.starts_with("metadata/"))
+        );
+        assert!(
+            gw.report
+                .entries
+                .iter()
+                .any(|e| e.construct.starts_with("callbacks/"))
+        );
+
+        // jwt-cel-http: the clean end-to-end example. JWT (via jwksUrl) + CEL
+        // authz over top-level claims and http.* translate with zero
+        // approximation and no fail-closed; the only skip is the inherent
+        // spec.targetRef binding. This is the property the runnable demo relies
+        // on, so guard it directly (not just via the golden diff).
+        let clean = transpile_fixture("jwt-cel-http");
+        assert!(!clean.report.has_fatal(), "jwt-cel-http must not fail closed");
+        let (_translated, approximated, _skipped) = clean.report.counts();
+        assert_eq!(approximated, 0, "clean example must have zero approximated constructs");
+        assert!(clean.cpex_doc.contains("kind: identity/jwt"));
+        assert!(clean.cpex_doc.contains("role: user"), "identity plugin sets role: user");
+        assert!(clean.cpex_doc.contains("kind: cel"), "cel PDP resolver declared");
+        // RBAC membership maps to CPEX's boolean identity namespaces, not to a
+        // (never-populated) claim.* array test.
+        assert!(
+            clean.cpex_doc.contains("has(role.hr) && role.hr"),
+            "role membership → role.<name> boolean"
+        );
+        assert!(
+            clean.cpex_doc.contains("has(perm.tool_execute) && perm.tool_execute"),
+            "permission membership → perm.<name> boolean"
+        );
+        assert!(
+            !clean.cpex_doc.contains("claim."),
+            "clean example must not emit unpopulated claim.* references"
+        );
+    }
+}

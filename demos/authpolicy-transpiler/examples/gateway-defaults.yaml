@@ -1,0 +1,36 @@
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: gateway-defaults
+  namespace: gateway-system
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: prod-gateway
+  defaults:
+    when:
+      - predicate: "request.host.endsWith('.internal.example.com')"
+    patterns:
+      verified-email:
+        - predicate: "auth.identity.email_verified == true"
+    rules:
+      authentication:
+        jwt-internal:
+          jwt:
+            jwksUrl: "https://sso.internal.example.com/jwks"
+      metadata:
+        user-profile:
+          http:
+            urlExpression: "'https://profile.internal.example.com/users/' + auth.identity.sub"
+            method: GET
+      authorization:
+        email-verified:
+          patternMatching:
+            patterns:
+              - patternRef: verified-email
+      callbacks:
+        audit-log:
+          http:
+            url: "https://audit.internal.example.com/log"
+            method: POST

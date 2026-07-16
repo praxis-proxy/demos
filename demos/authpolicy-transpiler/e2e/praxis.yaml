@@ -1,0 +1,38 @@
+# Praxis listener for the AuthPolicy → CEL generic-HTTP (L7) demo.
+#
+# Chain: policy → router → load_balancer. There is NO `mcp` filter and no
+# `body_access` — this is pure L7 admission control. The `policy` filter
+# resolves the JWT identity and evaluates the emitted `global` CPEX policy
+# (CEL over http.* + top-level claims) at request admission:
+#
+#   * allowed  → forwarded to the echo backend (HTTP 200)
+#   * authz deny → Praxis default L7 deny (HTTP 403)
+#   * no / invalid token → identity gate (HTTP 401)
+#
+# `config_path` points at the transpiler output written by run-demo.sh into
+# ./out. Run with `./run-demo.sh` (or `praxis -c praxis.yaml`
+# once ./out is populated and Keycloak is up).
+
+listeners:
+  - name: gateway
+    address: "127.0.0.1:8095"
+    protocol: http
+    filter_chains:
+      - main
+
+filter_chains:
+  - name: main
+    filters:
+      - filter: policy
+        config_path: ./out/jwt-cel-http-cpex-policy.yaml
+
+      - filter: router
+        routes:
+          - path_prefix: "/"
+            cluster: echo-backend
+
+      - filter: load_balancer
+        clusters:
+          - name: echo-backend
+            endpoints:
+              - "127.0.0.1:9200"

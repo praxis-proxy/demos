@@ -1,0 +1,52 @@
+# == CPEX policy document ==
+plugin_settings:
+  routing_enabled: true
+plugins:
+- name: keycloak-jwt
+  kind: identity/jwt
+  hooks:
+  - identity.resolve
+  on_error: fail
+  config:
+    role: user
+    header: Authorization
+    trusted_issuers:
+    - issuer: http://localhost:8081/realms/cpex-demo
+      algorithms:
+      - RS256
+      decoding_key:
+        kind: jwks_url
+        url: http://localhost:8081/realms/cpex-demo/protocol/openid-connect/certs
+    claim_mapper: standard
+global:
+  authentication:
+  - keycloak-jwt
+  authorization:
+    pre_invocation:
+    - require(authenticated)
+    - cel:
+        expr: '!((http.path.startsWith(''/api''))) || (!((http.method == ''GET'')) || (((has(perm.tool_execute) && perm.tool_execute))))'
+    - cel:
+        expr: '!((http.path.startsWith(''/api''))) || (!(((http.method == ''POST'') || (http.method == ''DELETE''))) || (((has(role.hr) && role.hr))))'
+  pdp:
+  - kind: cel
+
+# == Praxis filter block ==
+filter: policy
+config_path: /etc/praxis/jwt-cel-http-cpex-policy.yaml
+
+# == Coverage report ==
+AuthPolicy → Praxis coverage report
+===================================
+translated: 4   approximated: 0   skipped: 1
+
+[INFO ] skipped       spec.targetRef
+          Gateway API binding is not translated; wire the emitted filter block into a Praxis chain manually.
+[INFO ] translated    authentication/keycloak-jwt
+          JWT → identity/jwt (role: user; algorithms default to RS256 — widen in the emitted policy if the IdP signs with ES256/etc.).
+[INFO ] translated    authorization/reads-need-tool-execute
+          patternMatching → CEL PDP step (`cel: { expr }`).
+[INFO ] translated    authorization/writes-need-hr
+          patternMatching → CEL PDP step (`cel: { expr }`).
+[INFO ] translated    spec.when
+          policy activation condition folded into the global policy steps.

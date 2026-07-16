@@ -19,7 +19,7 @@ _print_response() {
   headers=$(printf '%s' "$raw" | awk 'NR>1 && /^\r?$/ {exit} NR>1 {sub(/\r$/, ""); print}')
   body=$(printf '%s' "$raw" | awk 'p {print} /^\r?$/ {p=1}')
   echo "  $status_line"
-  printf '%s\n' "$headers" | awk 'tolower($0) ~ /^x-cpex|^content-type|^www-authenticate/ {print "  " $0}'
+  printf '%s\n' "$headers" | awk 'tolower($0) ~ /^x-policy|^content-type|^www-authenticate/ {print "  " $0}'
   if [ -n "$body" ]; then
     echo "  ---"
     if printf '%s' "$body" | jq . >/dev/null 2>&1; then

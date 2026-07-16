@@ -1,0 +1,9 @@
+/target
+/out
+Cargo.lock
+
+# Demo recordings (regenerate with demo/record_demo.py --record)
+demo/*.cast
+demo/*.gif
+demo/*.mp4
+demo/__pycache__/

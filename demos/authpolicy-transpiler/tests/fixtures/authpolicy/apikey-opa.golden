@@ -1,0 +1,31 @@
+# == CPEX policy document ==
+plugin_settings:
+  routing_enabled: true
+plugins: []
+global:
+  authorization:
+    pre_invocation:
+    - require(false)
+
+# == Praxis filter block ==
+filter: policy
+config_path: /etc/praxis/apikey-opa-cpex-policy.yaml
+
+# == Coverage report ==
+AuthPolicy → Praxis coverage report
+===================================
+translated: 0   approximated: 1   skipped: 4
+
+FATAL: authorization coverage is incomplete in a way that would fail open.
+The emitted policy denies by default; resolve the FATAL entries below before use.
+
+[INFO ] skipped       spec.targetRef
+          Gateway API binding is not translated; wire the emitted filter block into a Praxis chain manually.
+[WARN ] skipped       authentication/api-key-users
+          authentication method `apiKey` is not supported this iteration.
+[WARN ] skipped       authorization/tier-check
+          authorization method `opa` is not supported; its intent is NOT enforced by the emitted policy.
+[FATAL] skipped       authorization
+          authorization rules were declared but none translated to an enforceable policy; emitting deny-all to avoid failing open.
+[WARN ] approximated  response.unauthenticated
+          custom unauthenticated denyWith (status/body/headers) is not carried; identity failure returns a default 401 until Phase B (U2/U7).

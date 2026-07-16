@@ -1,0 +1,52 @@
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: jwt-rbac
+  namespace: default
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: api-route
+  when:
+    - predicate: "!request.path.startsWith('/public')"
+  patterns:
+    admin-role:
+      - selector: "auth.identity.realm_access.roles"
+        operator: incl
+        value: admin
+  rules:
+    authentication:
+      keycloak-jwt:
+        jwt:
+          issuerUrl: "https://keycloak.example.com/realms/myrealm"
+          ttl: 3600
+        credentials:
+          authorizationHeader:
+            prefix: Bearer
+    authorization:
+      members-can-read:
+        when:
+          - predicate: "request.method == 'GET'"
+        patternMatching:
+          patterns:
+            - patternRef: admin-role
+            - predicate: "auth.identity.email_verified"
+      writes-need-admin:
+        when:
+          - any:
+              - predicate: "request.method == 'POST'"
+              - predicate: "request.method == 'DELETE'"
+        patternMatching:
+          patterns:
+            - patternRef: admin-role
+    response:
+      unauthenticated:
+        code: 401
+        headers:
+          WWW-Authenticate:
+            value: "Bearer realm=\"api\""
+      unauthorized:
+        code: 403
+        body:
+          value: "{\"error\":\"forbidden\"}"

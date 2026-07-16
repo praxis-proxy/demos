@@ -1,0 +1,77 @@
+# Conversations Multi-Turn — Rehydrate & Append-Back
+#
+# Demonstrates using the `conversation` field in Responses API
+# requests for automatic multi-turn history management:
+#
+#   1. openai_conversations handles CRUD for /v1/conversations
+#      and on the response path appends input+output items back
+#      to the conversation after a successful response.
+#
+#   2. openai_responses_format classifies the request. on_invalid
+#      is set to continue so Conversations API traffic passes
+#      through to the conversations filter.
+#
+#   3. openai_responses_validate generates response/conversation
+#      IDs and writes metadata for downstream filters.
+#
+#   4. openai_response_store persists responses to SQLite.
+#
+#   5. openai_responses_rehydrate loads conversation items when
+#      a request carries a `conversation` field, prepending them
+#      to the input.
+#
+#   6. responses_proxy rebuilds the outbound body with the full
+#      history and strips the `conversation` field.
+#
+#   7. router + load_balancer forward to vLLM.
+#
+# Build:
+#   cargo build -p praxis-ai-proxy --release
+
+listeners:
+  - name: ai-gateway
+    address: "127.0.0.1:8080"
+    filter_chains: [responses-pipeline]
+
+filter_chains:
+  - name: responses-pipeline
+    filters:
+      - filter: openai_conversations
+        backend: sqlite
+        database_url: "sqlite://responses.db?mode=rwc"
+        conversations_table: openai_conversations
+        items_table: openai_conversation_items
+
+      - filter: openai_responses_format
+        on_invalid: continue
+        headers:
+          format: x-praxis-ai-format
+          model: x-praxis-ai-model
+          stream: x-praxis-ai-stream
+          mode: x-praxis-responses-mode
+
+      - filter: openai_responses_validate
+
+      - filter: openai_response_store
+        backend: sqlite
+        database_url: "sqlite://responses.db?mode=rwc"
+        responses_table: openai_responses
+        conversations_table: openai_conversations
+
+      - filter: openai_responses_rehydrate
+
+      - filter: responses_proxy
+        name: inference
+
+      - filter: router
+        routes:
+          - path: "/v1/responses"
+            headers:
+              x-praxis-ai-format: "openai_responses"
+            cluster: "vllm"
+
+      - filter: load_balancer
+        clusters:
+          - name: "vllm"
+            endpoints:
+              - "127.0.0.1:8000"

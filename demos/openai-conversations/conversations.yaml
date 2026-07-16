@@ -1,0 +1,11 @@
+listeners:
+  - name: gateway
+    address: "127.0.0.1:8080"
+    filter_chains: [conversations-pipeline]
+
+filter_chains:
+  - name: conversations-pipeline
+    filters:
+      - filter: openai_conversations
+        backend: sqlite
+        database_url: "sqlite://conversations.db?mode=rwc"

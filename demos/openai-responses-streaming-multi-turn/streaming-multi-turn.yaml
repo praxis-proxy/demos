@@ -1,0 +1,68 @@
+# Streaming Multi-Turn Responses API
+#
+# Full pipeline with streaming event accumulation and multi-turn
+# conversation rehydration. Combines all Responses API filters:
+#
+#   1. openai_responses_format — classifies the request format
+#   2. openai_responses_validate — checks parameter combinations,
+#      generates response/conversation IDs
+#   3. openai_response_store — persists responses to SQLite (buffered
+#      path for non-streaming, accumulated state for streaming)
+#   4. openai_stream_events — observes SSE chunks, accumulates state
+#      (response object, output items, usage) for persistence
+#   5. openai_responses_rehydrate — loads conversation context from
+#      previous_response_id
+#   6. responses_proxy — rebuilds the outbound request body with full
+#      conversation history
+#   7. router + load_balancer — forward to vLLM
+#
+# Turn 1 (non-streaming): stored via the buffered path.
+# Turn 2 (streaming + previous_response_id): rehydrated from turn 1,
+#   forwarded with full history, SSE chunks accumulated and persisted.
+#
+# Build:
+#   cargo build -p praxis-ai-proxy --release
+
+listeners:
+  - name: ai-gateway
+    address: "127.0.0.1:8080"
+    filter_chains: [responses-pipeline]
+
+filter_chains:
+  - name: responses-pipeline
+    filters:
+      - filter: openai_responses_format
+        on_invalid: reject
+        headers:
+          format: x-praxis-ai-format
+          model: x-praxis-ai-model
+          stream: x-praxis-ai-stream
+          mode: x-praxis-responses-mode
+
+      - filter: openai_responses_validate
+
+      - filter: openai_response_store
+        backend: sqlite
+        database_url: "sqlite://responses.db?mode=rwc"
+        responses_table: openai_responses
+        conversations_table: openai_conversations
+
+      - filter: openai_stream_events
+
+      - filter: openai_responses_rehydrate
+
+      - filter: responses_proxy
+        name: inference
+
+      - filter: router
+        routes:
+          - path: "/v1/responses"
+            headers:
+              x-praxis-ai-format: "openai_responses"
+            cluster: "vllm"
+
+      - filter: load_balancer
+        clusters:
+          - name: "vllm"
+            endpoints:
+              - "127.0.0.1:8000"

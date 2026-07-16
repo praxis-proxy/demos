@@ -1,4 +1,4 @@
-# CPEX HR Demo
+# CPEX Policy Engine Demo
 
 An agent that can call tools can also leak data, exceed a user's privileges, or
 act on a credential it should never hold. This demo puts **Praxis** between the

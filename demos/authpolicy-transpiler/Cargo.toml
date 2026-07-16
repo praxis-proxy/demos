@@ -1,0 +1,19 @@
+[package]
+name = "authpolicy-transpiler"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+license = "MIT"
+publish = false
+description = "Offline CLI that transpiles a Kuadrant AuthPolicy into Praxis policy-filter + CPEX policy config (demo)."
+
+[[bin]]
+name = "authpolicy-transpiler"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.6.1", features = ["derive"] }
+serde = { version = "1.0.228", features = ["derive"] }
+# serde_yaml is deprecated upstream; Praxis and this demo use the maintained
+# yaml_serde fork as a drop-in (same `serde_yaml` crate name).
+serde_yaml = { package = "yaml_serde", version = "0.10.4" }
