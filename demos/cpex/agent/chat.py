@@ -66,6 +66,7 @@ import os
 import select
 import sys
 import threading
+import uuid
 from typing import Any
 
 import httpx
@@ -379,6 +380,12 @@ class GatewayClient:
         self.client_token = client_token
         self.user_token = user_token
         self._request_id = 0
+        # One session id per chat process. The gateway maps X-Session-Id to
+        # agent.session_id, and cpex keys session taint by H(subject:session_id)
+        # — so a `secret` label written by get_compensation persists across the
+        # turns of this conversation and later blocks send_email in it. A chat
+        # is a logical session; this makes that boundary explicit.
+        self.session_id = f"chat-{uuid.uuid4().hex}"
 
     def set_user_token(self, token: str) -> None:
         self.user_token = token
@@ -405,6 +412,7 @@ class GatewayClient:
             "Content-Type": "application/json",
             "Accept": "application/json",
             "X-User-Token": self.user_token,
+            "X-Session-Id": self.session_id,
         }
         # Resume a suspended approval: echo the id so the gateway *checks*
         # the existing elicitation instead of dispatching a fresh one. With
@@ -646,7 +654,12 @@ def prompt_or_event(console: Console, prompt_markup: str, pending: PendingApprov
 def inject_approval_events(events: list[dict[str, Any]], messages: list[dict[str, Any]]) -> None:
     """Fold background approval activity into the conversation as context so
     the agent addresses it. `ready` = approved-but-not-applied (ask the user
-    to confirm); `resolved` = declined/expired (it was not applied)."""
+    to confirm); `resolved` = declined/expired (it was not applied).
+
+    Injected with role `user`, not `system`: this is an out-of-band update the
+    agent must respond to on the next (often proactive) turn, and providers like
+    Anthropic require the conversation to end with a user message — a trailing
+    `system` message makes the completion call fail."""
     for ev in events:
         if ev["kind"] == "ready":
             note = (
@@ -665,7 +678,7 @@ def inject_approval_events(events: list[dict[str, Any]], messages: list[dict[str
                 f"[Update: {ev['approver']} DECLINED the '{ev['tool']}' request, so it was NOT "
                 f"applied. Let the user know.]"
             )
-        messages.append({"role": "system", "content": note})
+        messages.append({"role": "user", "content": note})
 
 
 def agent_announce(messages: list[dict[str, Any]], model: str, console: Console) -> None:

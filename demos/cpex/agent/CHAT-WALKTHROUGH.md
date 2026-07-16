@@ -278,3 +278,12 @@ record, no plugin coordination required.
 | All scenarios return 401 | Keycloak didn't finish importing. `docker compose down -v && docker compose up -d`, wait 30s, re-run `verify-token-exchange.sh`. |
 | Gateway response is a Pingora `PrematureBodyEnd` | The body-rewrite pad logic regressed. Body rewrite is the only place this happens. |
 | Cedar returns `cedar.default_deny` for an "allow" case | `${args.X}` substitution may have failed — check the gateway log for the resolve error; the bag key it asked for is in the error. |
+
+---
+
+## Recording this as a demo
+
+To capture this walkthrough as a GIF/MP4 automatically — a real chat session
+with the governing `cpex.yaml` policy spotlighted alongside each step — see
+[`demo/README.md`](demo/README.md) and `demo/record_chat_demo.py`. It needs a
+capable tool-calling model (`DEMO_MODEL`) plus `tmux`/`asciinema` on PATH.
