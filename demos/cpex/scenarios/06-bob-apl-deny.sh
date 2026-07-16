@@ -19,7 +19,7 @@ set -euo pipefail
 source "$(dirname "$0")/_lib.sh"
 
 step "Bob (HR) → search_repos (gateway short-circuits at the APL gate)"
-note "Expected: HTTP 200 + JSON-RPC error -32001, violation=routes.tool:search_repos.apl.policy[0]"
+note "Expected: HTTP 200 + JSON-RPC error -32001, violation=routes.tool:search_repos.apl.pre_invocation[0]"
 note "Triggered by: require(team.engineering | team.security) — Bob is team.hr"
 note "Expected: Cedar never runs; IdP never called"
 

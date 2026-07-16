@@ -39,14 +39,28 @@ _post_tool() {
   # store binds it to the resolved subject (H(subject : session_id)),
   # so the same id under a different user is a different bucket. Unset
   # → no header → unchanged behavior.
+  #
+  # Resume a suspended approval when ELICITATION_ID is set: the id goes
+  # in X-Policy-Elicitation-Id so the gateway *checks* the existing
+  # elicitation instead of dispatching a fresh one. Add ELICITATION_PEEK
+  # to only report status (-32121 once approved) WITHOUT running the tool
+  # — used to detect approval before committing. See scenario 11.
   local extra=()
   [ -n "${SESSION_ID:-}" ] && extra+=(-H "X-Session-Id: $SESSION_ID")
+  [ -n "${ELICITATION_ID:-}" ] && extra+=(-H "X-Policy-Elicitation-Id: $ELICITATION_ID")
+  [ -n "${ELICITATION_PEEK:-}" ] && extra+=(-H "X-Policy-Elicitation-Peek: true")
   curl -isS --max-time 10 -X POST "$GATEWAY/mcp" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $client_token" \
     -H "X-User-Token: $user_token" \
     ${extra[@]+"${extra[@]}"} \
     --data "$body"
+}
+
+_http_body() {
+  # Strip the HTTP status line + headers from a raw `curl -i` response,
+  # leaving just the body (so it can be piped to jq).
+  printf '%s' "$1" | awk 'p {print} /^\r?$/ {p=1}'
 }
 
 call_get_compensation() {
@@ -99,6 +113,34 @@ call_send_email() {
 EOF
   )
   _print_response "$(_post_tool "$user_token" "$client_token" "$body")"
+}
+
+adjust_compensation_body() {
+  # JSON-RPC body for adjust_compensation. Amount over the route's $10k
+  # threshold triggers require_approval (manager sign-off via CIBA).
+  local amount="$1" employee_id="${2:-EMP-001234}"
+  cat <<EOF
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "adjust_compensation",
+    "arguments": {
+      "employee_id": "$employee_id",
+      "amount": $amount
+    }
+  }
+}
+EOF
+}
+
+call_adjust_compensation() {
+  # One-shot adjust_compensation (used by scenario 10 for the under-
+  # threshold path that needs no approval). Scenario 11 drives the
+  # resume/peek flow directly via _post_tool + ELICITATION_ID.
+  local user_token="$1" client_token="$2" amount="$3" employee_id="${4:-EMP-001234}"
+  _print_response "$(_post_tool "$user_token" "$client_token" "$(adjust_compensation_body "$amount" "$employee_id")")"
 }
 
 show_last_audit() {

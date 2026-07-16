@@ -271,6 +271,39 @@ def deny_request(auth_req_id):
 
     return redirect('/')
 
+@app.route('/pending', methods=['GET'])
+def list_pending():
+    """List pending requests with their FULL ids (dev/testing only).
+
+    The HTML UI truncates the request id, so a script can't drive an
+    approval from it. This returns the full ids so a scenario can
+    auto-approve without a human clicking — see
+    scenarios/11-bob-adjust-approval.sh (AUTO_APPROVE=1). Optional
+    `?login_hint=<user>` filters to one approver.
+
+    Unauthenticated, like every route in this mock — including the
+    `/approve` and `/deny` POSTs that actually grant/refuse the approval,
+    and the `/` page that already lists these same requests. This whole
+    service simulates a phone-based approval UI for a localhost demo; it
+    is NOT a production authorization surface. Do not deploy it, or copy
+    this open-endpoint pattern, outside the demo. A real approval channel
+    would authenticate the approver (the human) and every API caller.
+    """
+    want = request.args.get('login_hint')
+    out = [
+        {
+            'auth_req_id': rid,
+            'login_hint': r.get('login_hint'),
+            'binding_message': r.get('binding_message'),
+            'scope': r.get('scope'),
+            'status': r.get('status'),
+            'timestamp': r.get('timestamp'),
+        }
+        for rid, r in pending_requests.items()
+        if r.get('status') == 'pending' and (want is None or r.get('login_hint') == want)
+    ]
+    return jsonify(out), 200
+
 @app.route('/status/<auth_req_id>', methods=['GET'])
 def check_status(auth_req_id):
     """Check if request was approved or denied"""
