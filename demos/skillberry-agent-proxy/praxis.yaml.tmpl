@@ -1,0 +1,160 @@
+# Skillberry Agent Proxy — Praxis pipeline template
+#
+# Deploy via scripts/start.sh, which:
+#   1. Derives SPAPRAXIS_LITELLMPROXY_HOST from SPAPRAXIS_LITELLMPROXY
+#   2. Expands this template with envsubst
+#   3. Strips the TLS block (between __TLS_BEGIN__/__TLS_END__) when port != 443
+#   4. Starts Praxis with the generated config
+#
+# Praxis environment variables consumed by this template
+# -------------------------------------------------------
+# Agent configuration (injected as headers into worker requests):
+#   SKILL_UUID                  Direct skill UUID (optional)
+#   SKILL_NAME                  Skill name to resolve (optional)
+#   ENABLE_THINK_LOGS           default: false
+#   USE_AGENT_TOOLS             default: true
+#   USE_AGENT_PROMPTS           default: true
+#   MCP_PROMPTS_POSITION        default: postfix
+#   REACT_RECURSION_LIMIT       default: 20
+#   SKILLBERRY_STORE_URL        default: http://127.0.0.1:8000
+#
+# LLM policy (injected as headers into worker requests; worker uses these
+# values when building every LLM call — client-supplied model/temperature
+# are ignored):
+#   SPAPRAXIS_MODEL         Model name forwarded to the worker (required).
+#                           Must match the model ID as registered in LiteLLM —
+#                           NOT the OpenAI SDK prefix (e.g. use
+#                           "rits/openai/gpt-oss-120b-a100", not
+#                           "openai/rits/openai/gpt-oss-120b-a100").
+#   SPAPRAXIS_TEMPERATURE   Temperature forwarded to the worker (required)
+#
+# LLM provider credentials and routing (used by llm-egress):
+#   SPAPRAXIS_API_KEY       API key injected into every outbound LLM request
+#                           (Bearer token). The client's Authorization header
+#                           is overwritten — the client key never reaches the
+#                           upstream provider.
+#   SPAPRAXIS_LITELLMPROXY  LiteLLM proxy endpoint as host:port (required).
+#                           e.g. my-litellm-proxy.com:443 (HTTPS — enables TLS)
+#                                my-litellm-proxy.com:4000 (plain HTTP)
+#                           Port 443 triggers TLS with SNI on the upstream
+#                           connection. Any other port uses plain HTTP.
+#   SPAPRAXIS_LITELLMPROXY_HOST  (auto-derived by start.sh — do not set manually)
+#                                Hostname extracted from SPAPRAXIS_LITELLMPROXY.
+#                                Used for the Host header and TLS SNI.
+
+listeners:
+  # ── Port 7000 — client-ingress (public) ────────────────────────────────────
+  # Receives external client requests. Applies security, injects agent config
+  # as headers, then routes to the Skillberry Worker.
+  - name: client-ingress
+    address: "0.0.0.0:7000"
+    filter_chains:
+      - client-ingress-chain
+
+  # ── Port 8081 — llm-egress (loopback only) ─────────────────────────────────
+  # Receives LLM calls from the worker. Applies model routing, rewriting, and
+  # credential injection. Never reachable from outside the host.
+  - name: llm-egress
+    address: "127.0.0.1:8081"
+    filter_chains:
+      - llm-routing-chain
+
+filter_chains:
+
+  # ── client-ingress-chain ────────────────────────────────────────────────────
+  - name: client-ingress-chain
+    filters:
+
+      - filter: access_log
+
+      # Step 1: Inject agent configuration as request headers.
+      # Values are expanded from Praxis env vars at deploy time via envsubst.
+      # request_set always overwrites — client cannot influence these values.
+      # These headers are only present on the client-ingress → worker leg;
+      # the llm-egress listener never sees them.
+      - filter: headers
+        request_set:
+          - name: x-skillberry-skill-uuid
+            value: "${SKILL_UUID}"
+          - name: x-skillberry-skill-name
+            value: "${SKILL_NAME}"
+          - name: x-skillberry-enable-think-logs
+            value: "${ENABLE_THINK_LOGS}"
+          - name: x-skillberry-use-agent-tools
+            value: "${USE_AGENT_TOOLS}"
+          - name: x-skillberry-use-agent-prompts
+            value: "${USE_AGENT_PROMPTS}"
+          - name: x-skillberry-mcp-prompts-position
+            value: "${MCP_PROMPTS_POSITION}"
+          - name: x-skillberry-react-recursion-limit
+            value: "${REACT_RECURSION_LIMIT}"
+          - name: x-skillberry-tools-url
+            value: "${SKILLBERRY_STORE_URL}"
+          # LLM policy — overrides whatever the client sends.
+          # The worker reads these headers and ignores the client's model/temperature.
+          - name: x-skillberry-llm-model
+            value: "${SPAPRAXIS_MODEL}"
+          - name: x-skillberry-llm-temperature
+            value: "${SPAPRAXIS_TEMPERATURE}"
+
+      # Step 2: Route to the Skillberry Worker
+      - filter: router
+        routes:
+          - path_prefix: /
+            cluster: skillberry-worker
+
+      - filter: load_balancer
+        clusters:
+          - name: skillberry-worker
+            endpoints:
+              - "127.0.0.1:7010"
+            connection_timeout_ms: 5000
+            read_timeout_ms: 120000
+            write_timeout_ms: 30000
+
+  # ── llm-routing-chain ───────────────────────────────────────────────────────
+  - name: llm-routing-chain
+    filters:
+
+      - filter: access_log
+
+      # Extract model name into X-Model header for routing decisions
+      - filter: model_to_header
+        header: X-Model
+
+      # Rewrite the Host header to the upstream hostname.
+      - filter: headers
+        request_set:
+          - name: Host
+            value: "${SPAPRAXIS_LITELLMPROXY_HOST}"
+
+      # Route all traffic to the LiteLLM proxy.
+      - filter: router
+        routes:
+          - path_prefix: /
+            cluster: litellm-proxy
+
+      # Inject API key from Praxis environment.
+      # Overwrites any Authorization header the worker sends — the client's
+      # key never reaches the upstream provider.
+      - filter: credential_injection
+        clusters:
+          - name: litellm-proxy
+            header: Authorization
+            env_var: SPAPRAXIS_API_KEY
+            header_prefix: "Bearer "
+
+      - filter: load_balancer
+        clusters:
+          - name: litellm-proxy
+            # __TLS_BEGIN__
+            tls:
+              sni: "${SPAPRAXIS_LITELLMPROXY_HOST}"
+            # __TLS_END__
+            endpoints:
+              - "${SPAPRAXIS_LITELLMPROXY}"
+
+
+runtime:
+  threads: 4
+  max_connections: 10000
