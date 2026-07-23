@@ -33,7 +33,7 @@ DESC
 
 errors=0
 
-for cmd in curl jq envsubst git "${PYTHON_VERSION}"; do
+for cmd in curl jq envsubst git tmux "${PYTHON_VERSION}"; do
     if command -v "${cmd}" &>/dev/null; then
         ok "${cmd}"
     else
@@ -166,27 +166,30 @@ fi
 ok "Skill ready"
 
 # ══════════════════════════════════════════════════════════════════════════════
-section "5/7 Start Worker"
+section "5/7 Start Worker + Praxis (tmux)"
 cat <<'DESC'
+  Creating tmux session "skillberry-demo" with windows: praxis, worker, client.
   Starting Skillberry Worker (ReAct agent loop) on port 7010.
-  Log: /tmp/worker.log
 DESC
 
-LLM_BASE_URL="http://127.0.0.1:8081/v1" \
-    "${WORKER_VENV}/bin/uvicorn" worker.main:app --app-dir "${WORKER_DIR}" --host 127.0.0.1 --port "${WORKER_PORT}" \
-    > "${WORKER_LOG}" 2>&1 &
-echo $! > "${WORKER_PID_FILE}"
-info "Worker PID: $(cat "${WORKER_PID_FILE}")"
+# Create tmux session with three named windows
+tmux kill-session -t "${TMUX_SESSION}" 2>/dev/null || true
+tmux new-session -d -s "${TMUX_SESSION}" -n worker
+tmux new-window -t "${TMUX_SESSION}" -n praxis
+tmux new-window -t "${TMUX_SESSION}" -n client
+
+# Start worker in its tmux window
+tmux send-keys -t "${TMUX_SESSION}:worker" \
+    "LLM_BASE_URL=http://127.0.0.1:8081/v1 ${WORKER_VENV}/bin/uvicorn worker.main:app --app-dir ${WORKER_DIR} --host 127.0.0.1 --port ${WORKER_PORT}" Enter
 
 wait_for_health "http://localhost:${WORKER_PORT}/health" "Skillberry Worker" 30
 
 # ══════════════════════════════════════════════════════════════════════════════
 section "6/7 Start Praxis"
 cat <<'DESC'
-  Starting Praxis on the host.
+  Starting Praxis in tmux window "praxis".
   - Port 7000: client ingress (injects skill config → worker)
   - Port 8081: LLM egress (credential injection → LiteLLM proxy)
-  Log: /tmp/praxis.log
 DESC
 
 mkdir -p "${ARTIFACTS_DIR}"
@@ -206,10 +209,9 @@ else
     info "HTTPS upstream (TLS enabled)"
 fi
 
-RUST_LOG="${RUST_LOG:-praxis_filter=info}" "${PRAXIS_BIN}" --config "${RUNTIME_CONFIG}" \
-    > "${PRAXIS_LOG}" 2>&1 &
-echo $! > "${PRAXIS_PID_FILE}"
-info "Praxis PID: $(cat "${PRAXIS_PID_FILE}")"
+# Start praxis in its tmux window
+tmux send-keys -t "${TMUX_SESSION}:praxis" \
+    "RUST_LOG=${RUST_LOG:-praxis_filter=info} ${PRAXIS_BIN} --config ${RUNTIME_CONFIG}" Enter
 
 wait_for_health "http://localhost:${PRAXIS_PORT}/health" "Praxis" 15
 
@@ -220,23 +222,32 @@ cat <<'DESC'
   Client → Praxis (7000) → Worker (7010) → Praxis LLM-egress (8081) → LiteLLM
 DESC
 
-export OPENAI_API_BASE="http://localhost:${PRAXIS_PORT}/v1"
-export OPENAI_API_KEY="not-used"
+# Send client command to its tmux window
+tmux send-keys -t "${TMUX_SESSION}:client" \
+    "OPENAI_API_BASE=http://localhost:${PRAXIS_PORT}/v1 OPENAI_API_KEY=not-used ${CLIENT_VENV}/bin/python ${SCRIPT_DIR}/emulate_client.py" Enter
 
-"${CLIENT_VENV}/bin/python" "${SCRIPT_DIR}/emulate_client.py"
+info "Client running in tmux window 'client'"
 
 # ══════════════════════════════════════════════════════════════════════════════
 printf '\n\033[1;32m'
 cat <<DONE
-  ┌──────────────────────────────────────────────────────────┐
-  │          Demo completed successfully!                     │
-  │                                                          │
-  │   Store:   PID $(cat "${STORE_PID_FILE}")  :${STORE_PORT}  ${STORE_LOG}   │
-  │   Worker:  PID $(cat "${WORKER_PID_FILE}")  :${WORKER_PORT}  ${WORKER_LOG}      │
-  │   Praxis:  PID $(cat "${PRAXIS_PID_FILE}")  :${PRAXIS_PORT}  ${PRAXIS_LOG}     │
-  │                                                          │
-  │   Stop:    ./scripts/stop-demo.sh                        │
-  │   Purge:   ./scripts/purge-demo.sh                       │
-  └──────────────────────────────────────────────────────────┘
+  ┌──────────────────────────────────────────────────────────────┐
+  │          Demo started successfully!                           │
+  │                                                              │
+  │   tmux session: ${TMUX_SESSION}                              │
+  │                                                              │
+  │   Windows:                                                   │
+  │     worker  — Skillberry Worker on :${WORKER_PORT}           │
+  │     praxis  — Praxis gateway on :${PRAXIS_PORT}              │
+  │     client  — Chat client (re-run anytime)                   │
+  │                                                              │
+  │   Attach:  tmux attach -t ${TMUX_SESSION}                    │
+  │   Switch:  Ctrl-b n (next window)                            │
+  │   Stop:    ./scripts/stop-demo.sh                            │
+  │   Purge:   ./scripts/purge-demo.sh                           │
+  └──────────────────────────────────────────────────────────────┘
 DONE
 printf '\033[0m\n'
+
+# Attach to the tmux session so user sees live output
+exec tmux attach -t "${TMUX_SESSION}"

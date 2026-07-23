@@ -8,6 +8,10 @@ source "${SCRIPT_DIR}/lib.sh"
 
 info "Stopping demo services..."
 
+# Kill tmux session (takes down worker, praxis, client)
+tmux kill-session -t "${TMUX_SESSION}" 2>/dev/null && ok "tmux session '${TMUX_SESSION}' killed" || true
+
+# Port-based fallback for any remaining processes
 stop_pid_file "${PRAXIS_PID_FILE}" "Praxis" "${PRAXIS_PORT}"
 stop_pid_file "${WORKER_PID_FILE}" "Worker" "${WORKER_PORT}"
 stop_pid_file "${STORE_PID_FILE}" "Store" "${STORE_PORT}"

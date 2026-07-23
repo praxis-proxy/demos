@@ -44,6 +44,9 @@ STORE_PID_FILE="${DEMO_DIR}/.store.pid"
 WORKER_PID_FILE="${DEMO_DIR}/.worker.pid"
 PRAXIS_PID_FILE="${DEMO_DIR}/.praxis.pid"
 
+# Tmux
+TMUX_SESSION="skillberry-demo"
+
 # Python
 PYTHON_VERSION="${PYTHON_VERSION:-python3.11}"
 
