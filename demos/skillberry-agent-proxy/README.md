@@ -1,17 +1,22 @@
 # Skillberry Agent Proxy — Praxis Agentic Gateway
 
 A fully automated demo of **Praxis** as an agentic gateway for the Skillberry
-Agent platform. All services run locally on the host — no Docker required.
+Agent platform, based on [skillberry-agent-praxis-poc](https://github.com/skillberry-ai/skillberry-agent-praxis-poc).
 
 ## What it shows
 
-| Concern | Demo behavior |
-|---------|---------------|
-| Client | `emulate_client.py` sends an OpenAI-compatible chat completion |
-| Gateway | Praxis on localhost:7000 — skill config injection + LLM routing |
-| Worker | FastAPI service (ReAct loop) on localhost:7010 |
-| Store | Skill resolution + tool definitions on localhost:8000 |
-| LLM | Proxied through Praxis llm-egress (localhost:8081) → LiteLLM |
+| Step | What happens |
+|------|--------------|
+| 1 | Client sends an OpenAI-compatible chat completion to Praxis (:7000) |
+| 2 | Praxis injects skill config and forwards to Worker (:7010) |
+| 3 | Worker resolves the skill from the Store (:8000), runs a ReAct agent loop |
+| 4 | Worker's LLM calls go through Praxis egress (:8081), which injects credentials and routes to LiteLLM |
+| 5 | Final response flows back through the pipeline to the client |
+
+### Key behaviors
+
+- **Credential isolation** — the client never sends a real API key; Praxis injects it on the egress path.
+- **Model policy** — Praxis overrides the client's model/temperature with its own configured values.
 
 ## Architecture
 
@@ -77,8 +82,8 @@ The script will:
 2. Clone and install store + worker into a local `.venv`
 3. Start the Skillberry Store (port 8000)
 4. Import the demo skill
-5. Create a tmux session (`skillberry-demo`) and start the Worker (port 7010)
-6. Start Praxis (port 7000 ingress, port 8081 LLM egress)
+5. Create a tmux session and start Praxis (port 7000 ingress, port 8081 LLM egress)
+6. Start the Worker (port 7010)
 7. Run the client emulator and attach to the tmux session
 
 After setup, you're dropped into tmux with 3 windows:
@@ -88,23 +93,33 @@ After setup, you're dropped into tmux with 3 windows:
 
 Use `Ctrl-b n`/`Ctrl-b p` to switch windows, `Ctrl-b d` to detach, `Ctrl-b [` to enter scroll mode (navigate with arrow keys or PgUp/PgDn, `q` to exit).
 
-## Stopping and purging
-
 ```bash
-# Stop all services — kills tmux session + store (preserves cloned repos and venv)
+# Stop all services (preserves cloned repos and venv)
 ./scripts/stop-demo.sh
 
 # Full cleanup: stop + remove repos, venv, logs
 ./scripts/purge-demo.sh
 ```
 
-## Logs
+## What to look for
 
-| Service | Where |
-|---------|-------|
-| Store | `tmp/skillberry-store/service.log` (managed internally) |
-| Worker | Live in tmux window `1:worker` |
-| Praxis | Live in tmux window `0:praxis` |
+### Praxis logs (tmux window `0:praxis`)
+
+- `filter=access_log` lines showing requests flowing through ingress and egress
+
+### Worker logs (tmux window `1:worker`)
+
+- `Resolved skill UUID:` — confirms the store resolved the skill
+- `MCP tools retrieved:` — shows tool count loaded from the skill
+- `execute_agentic_graph started/ended` — brackets the ReAct loop
+
+### Client logs (tmux window `2:client`)
+
+- `Listing available tools` — shows the available tools per client (prompt) request
+
+### Store log
+
+- Located at `/tmp/skillberry-store.log`
 
 ## Configuration
 
@@ -116,7 +131,6 @@ Use `Ctrl-b n`/`Ctrl-b p` to switch windows, `Ctrl-b d` to detach, `Ctrl-b [` to
 | `SPAPRAXIS_TEMPERATURE` | `0.0` | Temperature for all LLM calls |
 | `PRAXIS_BIN` | `~/praxis/target/debug/praxis` | Path to Praxis binary |
 | `PRAXIS_ROOT` | `~/praxis` | Praxis source root (for binary lookup) |
-| `PYTHON_VERSION` | `python3` | Python interpreter to use |
 
 ## Files
 

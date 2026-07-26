@@ -26,7 +26,7 @@ export SKILLBERRY_STORE_URL="${SKILLBERRY_STORE_URL:-http://127.0.0.1:8000}"
 banner
 
 # ══════════════════════════════════════════════════════════════════════════════
-section "1/7 Preflight"
+section "1/8 Preflight"
 cat <<'DESC'
   Checking: python, praxis binary, required env vars, port availability.
 DESC
@@ -76,7 +76,7 @@ done
 ok "All preflight checks passed"
 
 # ══════════════════════════════════════════════════════════════════════════════
-section "2/7 Install Dependencies"
+section "2/8 Install Dependencies"
 cat <<'DESC'
   Cloning repos (if needed) and installing into a local .venv.
 DESC
@@ -132,21 +132,20 @@ fi
 ok "All dependencies installed"
 
 # ══════════════════════════════════════════════════════════════════════════════
-section "3/7 Start Store"
+section "3/8 Start Store"
 cat <<'DESC'
   Starting Skillberry Store on port 8000.
-  Log: /tmp/skillberry-store.log
 DESC
 
 VIRTUAL_ENV="${STORE_VENV}" PATH="${STORE_VENV}/bin:${PATH}" EXECUTE_PYTHON_LOCALLY=True make -C "${STORE_DIR}" run > /dev/null 2>&1 &
 echo $! > "${STORE_PID_FILE}"
 info "Store PID: $(cat "${STORE_PID_FILE}")"
-info "Store log: ${STORE_DIR}/service.log"
+info "Store log: ${STORE_LOG}"
 
 wait_for_health "http://localhost:${STORE_PORT}/health" "Skillberry Store" 60
 
 # ══════════════════════════════════════════════════════════════════════════════
-section "4/7 Import Skill"
+section "4/8 Import Skill"
 cat <<'DESC'
   Importing praxis-demo-hello-world into the store.
   Tools: praxis_demo_greet, praxis_demo_echo.
@@ -166,30 +165,25 @@ fi
 ok "Skill ready"
 
 # ══════════════════════════════════════════════════════════════════════════════
-section "5/7 Start Worker + Praxis (tmux)"
+section "5/8 Start tmux"
 cat <<'DESC'
   Creating tmux session "skillberry-demo" with windows: praxis, worker, client.
-  Starting Skillberry Worker (ReAct agent loop) on port 7010.
 DESC
 
-# Create tmux session with three named windows
 tmux kill-session -t "${TMUX_SESSION}" 2>/dev/null || true
 tmux new-session -d -s "${TMUX_SESSION}" -n praxis
+tmux set-option -t "${TMUX_SESSION}" status-left ""
 tmux new-window -t "${TMUX_SESSION}" -n worker
 tmux new-window -t "${TMUX_SESSION}" -n client
 
-# Start worker in its tmux window
-tmux send-keys -t "${TMUX_SESSION}:worker" \
-    "LLM_BASE_URL=http://127.0.0.1:8081/v1 ${WORKER_VENV}/bin/uvicorn worker.main:app --app-dir ${WORKER_DIR} --host 127.0.0.1 --port ${WORKER_PORT}" Enter
-
-wait_for_health "http://localhost:${WORKER_PORT}/health" "Skillberry Worker" 30
+ok "tmux session '${TMUX_SESSION}' created"
 
 # ══════════════════════════════════════════════════════════════════════════════
-section "6/7 Start Praxis"
+section "6/8 Start Praxis"
 cat <<'DESC'
-  Starting Praxis in tmux window "praxis".
-  - Port 7000: client ingress (injects skill config → worker)
-  - Port 8081: LLM egress (credential injection → LiteLLM proxy)
+  Starting Praxis gateway.
+  - Port 7000: client ingress (injects skill config)
+  - Port 8081: LLM egress (credential injection)
 DESC
 
 mkdir -p "${ARTIFACTS_DIR}"
@@ -213,16 +207,23 @@ fi
 tmux send-keys -t "${TMUX_SESSION}:praxis" \
     "RUST_LOG=${RUST_LOG:-praxis_filter=info} ${PRAXIS_BIN} --config ${RUNTIME_CONFIG}" Enter
 
-wait_for_health "http://localhost:${PRAXIS_PORT}/health" "Praxis" 15
-
 # ══════════════════════════════════════════════════════════════════════════════
-section "7/7 Run Client"
+section "7/8 Start Worker"
 cat <<'DESC'
-  Sending a chat completion through the full pipeline:
-  Client → Praxis (7000) → Worker (7010) → Praxis LLM-egress (8081) → LiteLLM
+  Starting Skillberry Worker (ReAct agent loop) on port 7010.
 DESC
 
-# Send client command to its tmux window
+tmux send-keys -t "${TMUX_SESSION}:worker" \
+    "LLM_BASE_URL=http://127.0.0.1:8081/v1 ${WORKER_VENV}/bin/uvicorn worker.main:app --app-dir ${WORKER_DIR} --host 127.0.0.1 --port ${WORKER_PORT}" Enter
+
+wait_for_health "http://localhost:${WORKER_PORT}/health" "Skillberry Worker" 30
+
+# ══════════════════════════════════════════════════════════════════════════════
+section "8/8 Run Client"
+cat <<'DESC'
+  Sending a chat completion through the full pipeline.
+DESC
+
 tmux send-keys -t "${TMUX_SESSION}:client" \
     "OPENAI_API_BASE=http://localhost:${PRAXIS_PORT}/v1 OPENAI_API_KEY=not-used ${CLIENT_VENV}/bin/python ${SCRIPT_DIR}/emulate_client.py" Enter
 
@@ -240,12 +241,15 @@ printf '  │     worker  - Skillberry Worker on :%-25s│\n' "${WORKER_PORT}"
 printf '  │     praxis  - Praxis gateway on :%-28s│\n' "${PRAXIS_PORT}"
 printf '  │     client  - Chat client (re-run anytime)                   │\n'
 printf '  │                                                              │\n'
-printf '  │   Attach:  tmux attach -t %-35s│\n' "${TMUX_SESSION}"
+printf '  │   Detach:  Ctrl-b d                                          │\n'
 printf '  │   Switch:  Ctrl-b n (next window)                            │\n'
 printf '  │   Stop:    ./scripts/stop-demo.sh                            │\n'
 printf '  │   Purge:   ./scripts/purge-demo.sh                           │\n'
 printf '  └──────────────────────────────────────────────────────────────┘\n'
 printf '\033[0m\n'
 
-# Attach to the tmux session so user sees live output
+printf '  Press any key to attach to tmux session...'
+read -r -n 1 -s
+printf '\n'
+
 exec tmux attach -t "${TMUX_SESSION}"
