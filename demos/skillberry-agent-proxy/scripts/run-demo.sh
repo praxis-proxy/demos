@@ -202,10 +202,10 @@ info "Expanding praxis.yaml.tmpl..."
 envsubst < "${TEMPLATE}" > "${RUNTIME_CONFIG}"
 
 if [[ "${LITELLM_PORT}" != "443" ]]; then
-    sed -i'' -e '/# __TLS_BEGIN__/,/# __TLS_END__/d' "${RUNTIME_CONFIG}"
+    sed '/# __TLS_BEGIN__/,/# __TLS_END__/d' "${RUNTIME_CONFIG}" > "${RUNTIME_CONFIG}.tmp" && mv "${RUNTIME_CONFIG}.tmp" "${RUNTIME_CONFIG}"
     info "Plain HTTP upstream (port ${LITELLM_PORT})"
 else
-    sed -i'' -e '/# __TLS_BEGIN__/d; /# __TLS_END__/d' "${RUNTIME_CONFIG}"
+    sed '/# __TLS_BEGIN__/d; /# __TLS_END__/d' "${RUNTIME_CONFIG}" > "${RUNTIME_CONFIG}.tmp" && mv "${RUNTIME_CONFIG}.tmp" "${RUNTIME_CONFIG}"
     info "HTTPS upstream (TLS enabled)"
 fi
 
