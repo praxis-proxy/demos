@@ -16,7 +16,7 @@ Agent platform. All services run locally on the host — no Docker required.
 ## Architecture
 
 ```text
-                              ┌─────────────────────┐
+                             ┌─────────────────────┐
      ┌─────────┐             │       Praxis        │
      │  User   │────────────▸│  ┌───────────────┐  │
      └─────────┘             │  │   Ingress     │  │
@@ -26,9 +26,9 @@ Agent platform. All services run locally on the host — no Docker required.
                              └──────────┼──────────┘
                                         │
                                         v
-┌───────────────┐        ┌──────────────────────────┐
-│     Store     │◂ ─ ─ ─ │    Skillberry Agent      │
-│    (:8000)    │         │       (:7010)            │
+┌───────────────┐         ┌─────────────────────────┐
+│     Store     │◂ ─ ─ ─  │    Skillberry Agent     │
+│    (:8000)    │         │       (:7010)           │
 │  ┌─────────┐  │         │  ┌──────────────────┐   │
 │  │  tools  │  │         │  │  Business Logic  │   │
 │  │  skills │  │         │  │  (ReAct loop)    │   │
@@ -56,7 +56,7 @@ Agent platform. All services run locally on the host — no Docker required.
 - **Platform:** Linux or macOS
 - **Python 3.11+**
 - **tmux**
-- **Praxis** binary built from source (`cd ~/praxis && cargo build --package praxis-proxy`)
+- **Praxis** built from source (`cargo build -p praxis-proxy --release`)
 - **curl**, **jq**, **envsubst** (`brew install gettext` on macOS), **git**
 
 ## Quick start
@@ -86,7 +86,7 @@ After setup, you're dropped into tmux with 3 windows:
 - `1:worker` — Skillberry Worker live output
 - `2:client` — Chat client (re-run anytime)
 
-Use `Ctrl-b n`/`Ctrl-b p` to switch windows, `Ctrl-b d` to detach.
+Use `Ctrl-b n`/`Ctrl-b p` to switch windows, `Ctrl-b d` to detach, `Ctrl-b [` to enter scroll mode (navigate with arrow keys or PgUp/PgDn, `q` to exit).
 
 ## Stopping and purging
 
