@@ -46,7 +46,7 @@ os.environ.setdefault("OPENAI_API_KEY", "not-used")
 
 response = completion(
     model="openai/fake-model", # Praxis is configured with its own model to be used
-    messages=[{"role": "user", "content": "Show me your tools"}],
+    messages=[{"role": "user", "content": "What tools do you have available? Do not invoke tools."}],
     extra_headers={
         "skillberry-context-env_id": "praxis-demo-env"
     },
