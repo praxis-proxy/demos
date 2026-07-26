@@ -65,7 +65,7 @@ banner() {
   ┌─────────────────────────────────────────────────────┐
   │   Skillberry Agent Proxy — Praxis Agentic Gateway   │
   │                                                     │
-  │   Store (:8000) → Worker (:7010) → Praxis (:7000)  │
+  │   Store (:8000) → Worker (:7010) → Praxis (:7000)   │
   └─────────────────────────────────────────────────────┘
 
 BANNER

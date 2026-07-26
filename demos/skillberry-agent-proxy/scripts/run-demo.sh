@@ -230,23 +230,21 @@ info "Client running in tmux window 'client'"
 
 # ══════════════════════════════════════════════════════════════════════════════
 printf '\n\033[1;32m'
-cat <<DONE
-  ┌──────────────────────────────────────────────────────────────┐
-  │          Demo started successfully!                           │
-  │                                                              │
-  │   tmux session: ${TMUX_SESSION}                              │
-  │                                                              │
-  │   Windows:                                                   │
-  │     worker  — Skillberry Worker on :${WORKER_PORT}           │
-  │     praxis  — Praxis gateway on :${PRAXIS_PORT}              │
-  │     client  — Chat client (re-run anytime)                   │
-  │                                                              │
-  │   Attach:  tmux attach -t ${TMUX_SESSION}                    │
-  │   Switch:  Ctrl-b n (next window)                            │
-  │   Stop:    ./scripts/stop-demo.sh                            │
-  │   Purge:   ./scripts/purge-demo.sh                           │
-  └──────────────────────────────────────────────────────────────┘
-DONE
+printf '  ┌──────────────────────────────────────────────────────────────┐\n'
+printf '  │          Demo started successfully!                          │\n'
+printf '  │                                                              │\n'
+printf '  │   tmux session: %-45s│\n' "${TMUX_SESSION}"
+printf '  │                                                              │\n'
+printf '  │   Windows:                                                   │\n'
+printf '  │     worker  - Skillberry Worker on :%-25s│\n' "${WORKER_PORT}"
+printf '  │     praxis  - Praxis gateway on :%-28s│\n' "${PRAXIS_PORT}"
+printf '  │     client  - Chat client (re-run anytime)                   │\n'
+printf '  │                                                              │\n'
+printf '  │   Attach:  tmux attach -t %-35s│\n' "${TMUX_SESSION}"
+printf '  │   Switch:  Ctrl-b n (next window)                            │\n'
+printf '  │   Stop:    ./scripts/stop-demo.sh                            │\n'
+printf '  │   Purge:   ./scripts/purge-demo.sh                           │\n'
+printf '  └──────────────────────────────────────────────────────────────┘\n'
 printf '\033[0m\n'
 
 # Attach to the tmux session so user sees live output
