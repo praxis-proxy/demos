@@ -54,7 +54,8 @@ Agent platform. All services run locally on the host — no Docker required.
 ## Prerequisites
 
 - **Platform:** Linux or macOS
-- **Python 3.10+**
+- **Python 3.11+**
+- **tmux**
 - **Praxis** binary built from source (`cd ~/praxis && cargo build --package praxis-proxy`)
 - **curl**, **jq**, **envsubst** (`brew install gettext` on macOS), **git**
 
@@ -76,14 +77,21 @@ The script will:
 2. Clone and install store + worker into a local `.venv`
 3. Start the Skillberry Store (port 8000)
 4. Import the demo skill
-5. Start the Skillberry Worker (port 7010)
+5. Create a tmux session (`skillberry-demo`) and start the Worker (port 7010)
 6. Start Praxis (port 7000 ingress, port 8081 LLM egress)
-7. Run the client emulator and print the agent's response
+7. Run the client emulator and attach to the tmux session
+
+After setup, you're dropped into tmux with 3 windows:
+- `0:praxis` — Praxis gateway live output
+- `1:worker` — Skillberry Worker live output
+- `2:client` — Chat client (re-run anytime)
+
+Use `Ctrl-b n`/`Ctrl-b p` to switch windows, `Ctrl-b d` to detach.
 
 ## Stopping and purging
 
 ```bash
-# Stop all services (preserves cloned repos and venv)
+# Stop all services — kills tmux session + store (preserves cloned repos and venv)
 ./scripts/stop-demo.sh
 
 # Full cleanup: stop + remove repos, venv, logs
@@ -92,13 +100,11 @@ The script will:
 
 ## Logs
 
-All logs are written to `/tmp/`:
-
-| Service | Log file |
-|---------|----------|
-| Store | `/tmp/skillberry-store.log` |
-| Worker | `/tmp/worker.log` |
-| Praxis | `/tmp/praxis.log` |
+| Service | Where |
+|---------|-------|
+| Store | `tmp/skillberry-store/service.log` (managed internally) |
+| Worker | Live in tmux window `1:worker` |
+| Praxis | Live in tmux window `0:praxis` |
 
 ## Configuration
 

@@ -174,8 +174,8 @@ DESC
 
 # Create tmux session with three named windows
 tmux kill-session -t "${TMUX_SESSION}" 2>/dev/null || true
-tmux new-session -d -s "${TMUX_SESSION}" -n worker
-tmux new-window -t "${TMUX_SESSION}" -n praxis
+tmux new-session -d -s "${TMUX_SESSION}" -n praxis
+tmux new-window -t "${TMUX_SESSION}" -n worker
 tmux new-window -t "${TMUX_SESSION}" -n client
 
 # Start worker in its tmux window
