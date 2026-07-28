@@ -83,12 +83,12 @@ DESC
 
 mkdir -p "${TMP_DIR}"
 
-# Clone store
+# Clone store (pinned to a release tag)
 if [[ -d "${STORE_DIR}" ]]; then
     info "skillberry-store already cloned"
 else
-    info "Cloning skillberry-store..."
-    git clone --branch "${STORE_BRANCH}" "${STORE_REPO}" "${STORE_DIR}"
+    info "Cloning skillberry-store (tag ${STORE_TAG})..."
+    git clone --branch "${STORE_TAG}" --depth 1 "${STORE_REPO}" "${STORE_DIR}"
 fi
 
 # Clone worker
@@ -237,8 +237,8 @@ printf '  │                                                              │\n
 printf '  │   tmux session: %-45s│\n' "${TMUX_SESSION}"
 printf '  │                                                              │\n'
 printf '  │   Windows:                                                   │\n'
-printf '  │     worker  - Skillberry Worker on :%-25s│\n' "${WORKER_PORT}"
 printf '  │     praxis  - Praxis gateway on :%-28s│\n' "${PRAXIS_PORT}"
+printf '  │     worker  - Skillberry Worker on :%-25s│\n' "${WORKER_PORT}"
 printf '  │     client  - Chat client (re-run anytime)                   │\n'
 printf '  │                                                              │\n'
 printf '  │   Detach:  Ctrl-b d                                          │\n'

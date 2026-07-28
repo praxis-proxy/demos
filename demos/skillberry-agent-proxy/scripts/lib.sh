@@ -18,7 +18,7 @@ CLIENT_VENV="${DEMO_DIR}/.venv"
 
 # Repos
 STORE_REPO="https://github.com/skillberry-ai/skillberry-store.git"
-STORE_BRANCH="main"
+STORE_TAG="0.2.1"
 WORKER_REPO="https://github.com/skillberry-ai/skillberry-agent-praxis-poc.git"
 WORKER_BRANCH="main"
 
