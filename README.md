@@ -17,6 +17,7 @@ Each demo lives under `demos/<name>/` with its own README and bring-up script.
 | [openai-conversations](demos/openai-conversations/) | Full CRUD lifecycle for the OpenAI `/v1/conversations` API handled entirely locally by Praxis — create, retrieve, update, delete conversations and items, all backed by SQLite with no upstream traffic. |
 | [openai-conversations-multi-turn](demos/openai-conversations-multi-turn/) | Multi-turn via `conversation` field — create a conversation, reference it by ID on each turn. Praxis rehydrates stored items, forwards full context to vLLM, and auto-appends input+output back to the conversation. |
 | [openai-responses-file-resolve](demos/openai-responses-file-resolve/) | File resolution + document extraction — send a `file_id` in a Responses API request, Praxis resolves it via OGX, extracts text content, and converts `input_file` → `input_text` for vLLM. |
+| [skillberry-agent-proxy](demos/skillberry-agent-proxy/) | A fully automated demo of Praxis as an agentic gateway for the Skillberry Agent platform, based on [skillberry-agent-praxis-poc](https://github.com/skillberry-ai/skillberry-agent-praxis-poc) |
 
 ## Layout
 
