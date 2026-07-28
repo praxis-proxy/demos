@@ -72,6 +72,7 @@ cd demos/skillberry-agent-proxy
 # Set required environment variables
 export SPAPRAXIS_API_KEY="<your-llm-provider-key>"
 export SPAPRAXIS_LITELLMPROXY="<your-litellm-proxy-host:port>"
+export SPAPRAXIS_MODEL="<model-name>"
 
 # Run the full demo
 ./scripts/run-demo.sh
