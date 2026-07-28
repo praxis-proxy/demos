@@ -26,7 +26,7 @@ export SKILLBERRY_STORE_URL="${SKILLBERRY_STORE_URL:-http://127.0.0.1:8000}"
 banner
 
 # ══════════════════════════════════════════════════════════════════════════════
-section "1/8 Preflight"
+section "1/9 Preflight"
 cat <<'DESC'
   Checking: python, praxis binary, required env vars, port availability.
 DESC
@@ -76,7 +76,7 @@ done
 ok "All preflight checks passed"
 
 # ══════════════════════════════════════════════════════════════════════════════
-section "2/8 Install Dependencies"
+section "2/9 Install Dependencies"
 cat <<'DESC'
   Cloning repos (if needed) and installing into a local .venv.
 DESC
@@ -132,7 +132,7 @@ fi
 ok "All dependencies installed"
 
 # ══════════════════════════════════════════════════════════════════════════════
-section "3/8 Start Store"
+section "3/9 Start Store"
 cat <<'DESC'
   Starting Skillberry Store on port 8000.
 DESC
@@ -145,7 +145,7 @@ info "Store log: ${STORE_LOG}"
 wait_for_health "http://localhost:${STORE_PORT}/health" "Skillberry Store" 60
 
 # ══════════════════════════════════════════════════════════════════════════════
-section "4/8 Import Skill"
+section "4/9 Import Skill"
 cat <<'DESC'
   Importing praxis-demo-hello-world into the store.
   Tools: praxis_demo_greet, praxis_demo_echo.
@@ -165,7 +165,7 @@ fi
 ok "Skill ready"
 
 # ══════════════════════════════════════════════════════════════════════════════
-section "5/8 Start tmux"
+section "5/9 Start tmux"
 cat <<'DESC'
   Creating tmux session "skillberry-demo" with windows: praxis, worker, client.
 DESC
@@ -179,7 +179,7 @@ tmux new-window -t "${TMUX_SESSION}" -n client
 ok "tmux session '${TMUX_SESSION}' created"
 
 # ══════════════════════════════════════════════════════════════════════════════
-section "6/8 Start Praxis"
+section "6/9 Start Praxis"
 cat <<'DESC'
   Starting Praxis gateway.
   - Port 7000: client ingress (injects skill config)
@@ -208,7 +208,7 @@ tmux send-keys -t "${TMUX_SESSION}:praxis" \
     "RUST_LOG=${RUST_LOG:-praxis_filter=info} ${PRAXIS_BIN} --config ${RUNTIME_CONFIG}" Enter
 
 # ══════════════════════════════════════════════════════════════════════════════
-section "7/8 Start Worker"
+section "7/9 Start Worker"
 cat <<'DESC'
   Starting Skillberry Worker (ReAct agent loop) on port 7010.
 DESC
@@ -219,28 +219,36 @@ tmux send-keys -t "${TMUX_SESSION}:worker" \
 wait_for_health "http://localhost:${WORKER_PORT}/health" "Skillberry Worker" 30
 
 # ══════════════════════════════════════════════════════════════════════════════
-section "8/8 Run Client"
+section "8/9 Browse Skill"
 cat <<'DESC'
-  Sending a chat completion through the full pipeline.
+  The skill has been imported into the Skillberry Store.
+  Open the WebUI to explore it.
 DESC
 
-tmux send-keys -t "${TMUX_SESSION}:client" \
-    "OPENAI_API_BASE=http://localhost:${PRAXIS_PORT}/v1 OPENAI_API_KEY=not-used ${CLIENT_VENV}/bin/python ${SCRIPT_DIR}/emulate_client.py" Enter
+printf '\n'
+printf '  \033[1;36m→ Open your browser:\033[0m  http://localhost:8002\n'
+printf '  \033[1;36m→ Navigate to:\033[0m        Skills → praxis-demo-hello-world\n'
+printf '\n'
 
-info "Client running in tmux window 'client'"
+printf '  Press any key to continue...'
+read -r -n 1 -s
+printf '\n'
 
 # ══════════════════════════════════════════════════════════════════════════════
+section "9/9 Run Client"
+
 printf '\n\033[1;32m'
 printf '  ┌──────────────────────────────────────────────────────────────┐\n'
-printf '  │          Demo started successfully!                          │\n'
+printf '  │          Demo initiated successfully!                        │\n'
 printf '  │                                                              │\n'
-printf '  │   tmux session: %-45s│\n' "${TMUX_SESSION}"
+printf '  │   tmux session: %-45s│\n' "${TMUX_SESSION} (created)"
 printf '  │                                                              │\n'
 printf '  │   Windows:                                                   │\n'
 printf '  │     praxis  - Praxis gateway on :%-28s│\n' "${PRAXIS_PORT}"
 printf '  │     worker  - Skillberry Worker on :%-25s│\n' "${WORKER_PORT}"
-printf '  │     client  - Chat client (re-run anytime)                   │\n'
+printf '  │     client  - Chat client                                    │\n'
 printf '  │                                                              │\n'
+printf '  │   Attach:  tmux attach -t %-35s│\n' "${TMUX_SESSION}"
 printf '  │   Detach:  Ctrl-b d                                          │\n'
 printf '  │   Switch:  Ctrl-b n (next window)                            │\n'
 printf '  │   Stop:    ./scripts/stop-demo.sh                            │\n'
@@ -248,7 +256,21 @@ printf '  │   Purge:   ./scripts/purge-demo.sh                           │\n
 printf '  └──────────────────────────────────────────────────────────────┘\n'
 printf '\033[0m\n'
 
-printf '  Press any key to attach to tmux session...'
+printf '  Press any key to run the client...'
+read -r -n 1 -s
+printf '\n\n'
+
+info "Sending request through the full pipeline (Praxis → Worker → Store → LLM)..."
+printf '\n'
+OPENAI_API_BASE="http://localhost:${PRAXIS_PORT}/v1" OPENAI_API_KEY=not-used \
+    "${CLIENT_VENV}/bin/python" "${SCRIPT_DIR}/emulate_client.py"
+printf '\n'
+
+# Also send to tmux client window for later reference
+tmux send-keys -t "${TMUX_SESSION}:client" \
+    "OPENAI_API_BASE=http://localhost:${PRAXIS_PORT}/v1 OPENAI_API_KEY=not-used ${CLIENT_VENV}/bin/python ${SCRIPT_DIR}/emulate_client.py" Enter
+
+printf '\n  Press any key to attach to tmux session...'
 read -r -n 1 -s
 printf '\n'
 
