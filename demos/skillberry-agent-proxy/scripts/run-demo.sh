@@ -238,7 +238,7 @@ section "9/9 Run Client"
 
 printf '\n\033[1;32m'
 printf '  ┌──────────────────────────────────────────────────────────────┐\n'
-printf '  │          Demo initiated successfully!                        │\n'
+printf '  │          Demo ready!                                         │\n'
 printf '  │                                                              │\n'
 printf '  │   tmux session: %-45s│\n' "${TMUX_SESSION} (created)"
 printf '  │                                                              │\n'
