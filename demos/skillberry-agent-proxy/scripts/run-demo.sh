@@ -221,13 +221,12 @@ wait_for_health "http://localhost:${WORKER_PORT}/health" "Skillberry Worker" 30
 # ══════════════════════════════════════════════════════════════════════════════
 section "8/9 Browse Skill"
 cat <<'DESC'
-  The skill has been imported into the Skillberry Store.
-  Open the WebUI to explore it.
+  Querying the imported skill from the Skillberry Store API.
 DESC
 
+info "curl -s http://localhost:${STORE_PORT}/skills/praxis-demo-hello-world?fields=full | jq ..."
 printf '\n'
-printf '  \033[1;36m→ Open your browser:\033[0m  http://localhost:8002\n'
-printf '  \033[1;36m→ Navigate to:\033[0m        Skills → praxis-demo-hello-world\n'
+curl -s "http://localhost:${STORE_PORT}/skills/praxis-demo-hello-world?fields=full" | jq '{tools: [.tools[] | {name, description}], snippets: [.snippets[] | {name, content}]}'
 printf '\n'
 
 printf '  Press any key to continue...'
@@ -256,7 +255,7 @@ printf '  │   Purge:   ./scripts/purge-demo.sh                           │\n
 printf '  └──────────────────────────────────────────────────────────────┘\n'
 printf '\033[0m\n'
 
-printf '  Press any key to run the client...'
+printf '  Press any key to run the client... (scripts/emulate_client.py)'
 read -r -n 1 -s
 printf '\n\n'
 

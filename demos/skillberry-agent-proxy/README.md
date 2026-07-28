@@ -82,14 +82,16 @@ The script will:
 2. Clone and install store + worker into a local `.venv`
 3. Start the Skillberry Store (port 8000)
 4. Import the demo skill
-5. Create a tmux session and start Praxis (port 7000 ingress, port 8081 LLM egress)
-6. Start the Worker (port 7010)
-7. Run the client emulator and attach to the tmux session
+5. Create a tmux session
+6. Start Praxis (port 7000 ingress, port 8081 LLM egress)
+7. Start the Worker (port 7010)
+8. Query and display the imported skill (tools + snippets) from the Store API
+9. Run the client emulator in the foreground, then attach to the tmux session
 
 After setup, you're dropped into tmux with 3 windows:
 - `0:praxis` — Praxis gateway live output
 - `1:worker` — Skillberry Worker live output
-- `2:client` — Chat client (re-run anytime)
+- `2:client` — Chat client (re-run anytime for subsequent requests)
 
 Use `Ctrl-b n`/`Ctrl-b p` to switch windows, `Ctrl-b d` to detach, `Ctrl-b [` to enter scroll mode (navigate with arrow keys or PgUp/PgDn, `q` to exit).
 
@@ -134,12 +136,13 @@ Use `Ctrl-b n`/`Ctrl-b p` to switch windows, `Ctrl-b d` to detach, `Ctrl-b [` to
 
 ## Files
 
-| File | Description |
+| Path | Description |
 |------|-------------|
 | `praxis.yaml.tmpl` | Praxis pipeline template (expanded by envsubst) |
 | `skills/praxis-demo-hello-world/` | Demo skill (SKILL.md + 2 Python tools) |
-| `scripts/run-demo.sh` | Main entry point — full orchestration |
+| `scripts/run-demo.sh` | Main entry point — 9-step walkthrough orchestration |
 | `scripts/stop-demo.sh` | Stop all services |
 | `scripts/purge-demo.sh` | Stop + remove all generated files |
-| `scripts/lib.sh` | Shared utilities (banners, port checks) |
-| `scripts/emulate_client.py` | Client that sends a request through the pipeline |
+| `scripts/lib.sh` | Shared utilities (banners, port checks, health waits) |
+| `scripts/emulate_client.py` | Client that sends a chat completion through the pipeline |
+| `.gitignore` | Ignores generated dirs: `tmp/`, `artifacts/`, `.venv/` |
