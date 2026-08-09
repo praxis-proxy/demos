@@ -1,2 +1,7 @@
-/target
+# Local checkouts the build script resolves. Both are required because praxis
+# depends on the engine by relative path and cargo resolves that lexically rather
+# than through the .praxis symlink, so the engine must sit right here.
+# Both disappear once the engine is published and praxis depends on a version.
 /.praxis
+/praxis-policy
+/target

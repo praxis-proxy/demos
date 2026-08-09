@@ -6,7 +6,7 @@
 #
 # The gateway (./gateway) is a thin binary that composes praxis-ai's AI filters
 # (mcp classifier, ...) with the CPEX/HIL `policy` filter: it depends on
-# praxis-ai's server, enables `cpex-policy-engine`, and `[patch]`es
+# praxis-ai's server, enables `policy-engine`, and `[patch]`es
 # praxis-proxy-* to our HIL fork (via `gateway/.praxis`). praxis-ai + the
 # feature auto-register both filters — no manual wiring.
 #
@@ -15,12 +15,30 @@
 #   PRAXIS_DIR                          path to a local praxis checkout (symlinked)
 #   PRAXIS_GIT_URL (+ PRAXIS_GIT_REF)   cloned into .praxis (ref default: feat/hil_apl)
 #   existing gateway/.praxis            reused as-is
+#
+# Where the policy engine comes from, resolved into the gitignored
+# `gateway/praxis-policy`:
+#   PPE_DIR                             path to a local engine checkout (symlinked)
+#   PPE_GIT_URL (+ PPE_GIT_REF)         cloned in (ref default: main)
+#   existing gateway/praxis-policy      reused as-is
+#
+# The engine link is not optional and its name is not arbitrary. praxis depends on
+# the engine by relative path, and cargo resolves path dependencies lexically
+# rather than through the `.praxis` symlink: from `gateway/.praxis/filter`, a
+# `../praxis-policy` dependency resolves to `gateway/praxis-policy`, not to a
+# sibling of the praxis checkout. `[patch.crates-io]` cannot redirect it either,
+# because the engine is not published. So the engine has to be reachable at that
+# exact lexical location. Both links go away when the engine is published and
+# praxis depends on a version instead of a path.
+#
 # Other knobs:
 #   GATEWAY_PROFILE=release|debug       (default: release)
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/gateway"
 PRAXIS_LINK="$DIR/.praxis"
+# Name fixed by how cargo resolves praxis's relative dependency on the engine.
+PPE_LINK="$DIR/praxis-policy"
 
 # 1. Resolve the praxis fork source into ./gateway/.praxis.
 if [ -n "${PRAXIS_DIR:-}" ]; then
@@ -46,7 +64,32 @@ elif [ ! -e "$PRAXIS_LINK" ]; then
   exit 1
 fi
 
-# 2. Build.
+# 2. Resolve the policy engine source into ./gateway/praxis-policy.
+if [ -n "${PPE_DIR:-}" ]; then
+  target="$(cd "$PPE_DIR" && pwd)"
+  ln -sfn "$target" "$PPE_LINK"
+  echo "gateway: praxis-policy -> $target (PPE_DIR)" >&2
+elif [ -n "${PPE_GIT_URL:-}" ]; then
+  ref="${PPE_GIT_REF:-main}"
+  if [ -d "$PPE_LINK/.git" ]; then
+    echo "gateway: updating praxis-policy -> $ref ($PPE_GIT_URL)" >&2
+    git -C "$PPE_LINK" fetch --quiet --tags --force origin "$ref"
+    git -C "$PPE_LINK" checkout --quiet -B "$ref" FETCH_HEAD
+  else
+    echo "gateway: cloning praxis-policy <- $PPE_GIT_URL @ $ref" >&2
+    rm -rf "$PPE_LINK"
+    git clone --quiet --branch "$ref" "$PPE_GIT_URL" "$PPE_LINK"
+  fi
+elif [ ! -e "$PPE_LINK" ]; then
+  echo "fatal: no policy engine source for the gateway." >&2
+  echo "  Set PPE_DIR=<local praxis-policy checkout> or" >&2
+  echo "  PPE_GIT_URL=<url> [PPE_GIT_REF=<ref>] (default ref: main)." >&2
+  echo "  praxis depends on the engine by relative path and cargo resolves that" >&2
+  echo "  lexically, so it must exist at gateway/praxis-policy." >&2
+  exit 1
+fi
+
+# 3. Build.
 PROFILE="${GATEWAY_PROFILE:-release}"
 flag=""
 [ "$PROFILE" = "release" ] && flag="--release"
