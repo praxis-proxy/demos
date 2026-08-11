@@ -13,15 +13,16 @@
 # Result: HTTP 200 + JSON-RPC error code -32001 — per MCP's Tools
 # spec, gateway denials are reported as JSON-RPC errors inside HTTP
 # 200, not as HTTP 4xx. The data.violation depends on the PDP backend:
-# "cedar.default_deny" under cpex.yaml (Cedar); "cel" under
-# cpex-cel.yaml (CEL).
+# "cedar.default_deny" under cpex.yaml (Cedar); "cel.policy_denied"
+# under cpex-cel.yaml (CEL); "opa.policy_denied" under cpex-opa.yaml
+# (Rego).
 
 set -euo pipefail
 source "$(dirname "$0")/_lib.sh"
 
 step "Alice (engineering) → search_repos(visibility='external')"
 note "Expected: HTTP 200 + JSON-RPC error -32001"
-note "Expected violation: cedar.default_deny (Cedar) / cel.policy_denied (CEL on_deny)"
+note "Expected violation: cedar.default_deny (Cedar) / cel.policy_denied (CEL) / opa.policy_denied (Rego)"
 note "Triggered by: PDP denies — engineering can't read external repos"
 note "Expected upstream: no inbound request (gateway short-circuits at PDP)"
 

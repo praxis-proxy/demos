@@ -24,7 +24,7 @@
 # Needs the FULL stack (more than scenarios 01-10): restart.sh brings up
 # Keycloak with CIBA + the channel SPI, the auth-channel approval UI on
 # :5001, valkey, and the gateway built from the feat/hil_apl praxis fork.
-# Both cpex.yaml and cpex-cel.yaml behave identically (no PDP step here).
+# All three PDP configs behave identically (no PDP step here).
 
 set -euo pipefail
 source "$(dirname "$0")/_lib.sh"

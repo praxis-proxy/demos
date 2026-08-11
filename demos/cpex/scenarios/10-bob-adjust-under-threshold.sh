@@ -12,7 +12,7 @@
 #     → 200 OK, status "applied"  (require(role.hr) ✓, under $10k → no approval)
 #
 # The over-threshold path (approval required) is scenario 11.
-# Both cpex.yaml and cpex-cel.yaml behave identically here — the route
+# All three PDP configs behave identically here — the route
 # has no PDP step.
 
 set -euo pipefail

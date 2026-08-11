@@ -210,27 +210,35 @@ Scenarios 10 and 11 exercise the human-in-the-loop flow described in
 below. Scenario 11 needs the full stack (Keycloak CIBA plus the auth-channel UI);
 `restart.sh` brings it all up.
 
-## Alternative: CEL instead of Cedar
+## Alternatives: CEL or OPA instead of Cedar
 
 Scenarios 04 and 05 gate `search_repos` through a policy decision point. The
-default config (`cpex.yaml`) uses Cedar. An alternate config (`cpex-cel.yaml`)
-expresses the same decision with CEL (Common Expression Language):
+default config (`cpex.yaml`) uses Cedar. Two alternate configs express the same
+decision with CEL (Common Expression Language) and with OPA/Rego:
 
 ```bash
 GATEWAY_CONFIG=praxis-cel.yaml ./restart.sh
 ./scenarios/04-alice-internal-allow.sh        # 200 allow
 ./scenarios/05-alice-external-cedar-deny.sh   # -32001 deny, violation cel.policy_denied
+
+GATEWAY_CONFIG=praxis-opa.yaml ./restart.sh
+./scenarios/04-alice-internal-allow.sh        # 200 allow
+./scenarios/05-alice-external-cedar-deny.sh   # -32001 deny, violation opa.policy_denied
 ```
 
 The backends differ in how the rule is authored, not in the outcome:
 
-| | Cedar (`cpex.yaml`) | CEL (`cpex-cel.yaml`) |
-|---|---|---|
-| Where the rule lives | `policy_text` block (Cedar policy set) | inline `cel: { expr }` on the route |
-| The rule | `permit(...) when { principal.roles.contains("engineer") && resource.visibility == "internal" }` | `(has(role.engineer) && role.engineer && args.visibility == "internal") \|\| (has(role.security) && role.security)` |
-| Deny reaction | implicit `cedar.default_deny` | `on_deny: [deny('reason', 'cel.policy_denied')]` (a bare default-deny works too) |
-| Deny violation code | `cedar.default_deny` | `cel.policy_denied` |
-| Best for | versioned or signed policy sets, entity and relationship model | self-contained boolean predicate, no external policy store |
+| | Cedar (`cpex.yaml`) | CEL (`cpex-cel.yaml`) | OPA (`cpex-opa.yaml`) |
+|---|---|---|---|
+| Where the rule lives | `policy_text` block (Cedar policy set) | inline `cel: { expr }` on the route | `modules:` Rego text, queried by rule path |
+| The rule | `permit(...) when { principal.roles.contains("engineer") && resource.visibility == "internal" }` | `(has(role.engineer) && role.engineer && args.visibility == "internal") \|\| (has(role.security) && role.security)` | `allow if { input.role.engineer == true; input.args.visibility == "internal" }` plus a second `allow` for security |
+| Deny reaction | implicit `cedar.default_deny` | `on_deny: [deny('reason', 'cel.policy_denied')]` (a bare default-deny works too) | `default allow := false` plus `on_deny: [deny('reason', 'opa.policy_denied')]` |
+| Deny violation code | `cedar.default_deny` | `cel.policy_denied` | `opa.policy_denied` |
+| Best for | versioned or signed policy sets, entity and relationship model | self-contained boolean predicate, no external policy store | teams already running Rego, rules that compose and unit-test with existing OPA tooling |
+
+All three evaluate in-process. OPA runs on the embedded `regorus` interpreter, so
+there is no sidecar and no network hop on the decision path, and a Rego syntax
+error fails the config load rather than surfacing as a deny on first request.
 
 Both PDP backends are compiled into the same binary. The config's
 `pdp: { kind: ... }` and the route's `cedar:` or `cel:` step select which one
@@ -271,7 +279,7 @@ not the content, which is what separates it from scenario 07's content-based PII
 deny. Scenario 09 shows the taint cannot cross principals.
 
 Tainting is independent of the PDP, so 08 and 09 behave the same under both
-`cpex.yaml` and `cpex-cel.yaml`.
+`cpex.yaml`, `cpex-cel.yaml`, and `cpex-opa.yaml`.
 
 ### Where taint is stored
 
@@ -357,7 +365,7 @@ To run it unattended, set `AUTO_APPROVE=1`. The script then drives the auth-chan
 AUTO_APPROVE=1 ./scenarios/11-bob-adjust-approval.sh
 ```
 
-Both scenarios behave identically under `cpex.yaml` and `cpex-cel.yaml`, since the
+Both scenarios behave identically under all three configs, since the
 `adjust_compensation` route has no PDP step.
 
 ### Interactive walkthrough with the LLM agent
@@ -433,6 +441,8 @@ the padding, so the wire stays correct. This is documented in the filter source.
 | `cpex.yaml` | CPEX policy: plugins, routes, Cedar PDP policy text |
 | `praxis-cel.yaml` | Same listener as `praxis.yaml`, loads `cpex-cel.yaml`. Run via `GATEWAY_CONFIG=praxis-cel.yaml` |
 | `cpex-cel.yaml` | CEL variant: `search_repos` uses an inline `cel:` expression, no `apl:` wrapper |
+| `praxis-opa.yaml` | Same listener as `praxis.yaml`, loads `cpex-opa.yaml`. Run via `GATEWAY_CONFIG=praxis-opa.yaml` |
+| `cpex-opa.yaml` | OPA variant: a Rego module under `pdp:`, queried by `search_repos` with `opa: { query }` |
 | `docker-compose.yml` | Keycloak (8081), hr-mcp (9100), valkey (6379), and auth-channel (5001) |
 | `keycloak/realm-export.json` | Realm with users, clients, STE v2, and CIBA + the channel SPI |
 | `hr-mcp-server/` | Python mock MCP server (Dockerfile and `server.py`), incl. `adjust_compensation` |
@@ -453,6 +463,6 @@ The filter source is in the praxis repository at
 behind the `cpex-policy-engine` Cargo feature on `praxis-proxy-filter` (registered
 under the YAML filter name `policy`). That feature registers both the Cedar
 (`apl-pdp-cedar-direct`) and CEL (`apl-pdp-cel`) PDP backends, so one binary
-serves both `cpex.yaml` and `cpex-cel.yaml`. See the filter's own module docs
+serves both `cpex.yaml`, `cpex-cel.yaml`, and `cpex-opa.yaml`. See the filter's own module docs
 there for configuration and internals.
 
