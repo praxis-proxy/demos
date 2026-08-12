@@ -10,6 +10,37 @@ Forge owns cluster lifecycle and infra stacks. `maas-controller` **owns EnvoyFil
 
 This profile is for MaaS + Praxis integration work. It is **not** the Grid multi-cluster GLB demo, and it intentionally diverges from issue #2’s “CRDs-only / skip Authorino” simulation table.
 
+## What this demo proves
+
+MaaS (Models-as-a-Service on OpenShift AI) already ships a payload-processing
+step — **IPP** — as an Envoy `ExternalProcessor` in front of every model call,
+split into an **IPP-pre** hop (before Kuadrant auth: extract model identity,
+resolve the MaaS auth identity, apply bounded request mutations) and an
+**IPP-post** hop (after auth: protect the provider boundary, select the
+provider, translate protocol, inject provider credentials). Today that
+processor is a stock ODH container (`odh-ai-gateway-payload-processing`).
+
+This demo swaps that one container for **Praxis**, with nothing else in the
+stock MaaS datapath changed — same Gateway, same Kuadrant `AuthPolicy`, same
+CRDs, same HTTPRoute. `MAAS_IPP_PROFILE` is the switch:
+
+| `MAAS_IPP_PROFILE` | IPP-pre/IPP-post implementation | Platform manifests overlay |
+|---|---|---|
+| `llm-d` (stock) | `odh-ai-gateway-payload-processing` (`$IPP_IMAGE`) | `overlays/xks` |
+| `praxis` (this lab's default) | Praxis (`$PRAXIS_EXTPROC_IMAGE`), implementing the same Pre-Auth/Post-Auth contract | `overlays/xks-praxis` |
+
+That table is the actual point of the demo: it's evidence Praxis can sit in
+MaaS's existing `ExternalProcessor` slot and preserve IPP's pre/post-auth
+behavior, not a new, separate datapath that MaaS would have to adopt
+wholesale. From a roadmap perspective, that's the difference between "replace
+your gateway" and "replace one container" — the latter is a far smaller ask
+of a platform team already running MaaS in production.
+
+The `## Call models` walkthrough below exercises both hops end-to-end
+(model-identity extraction pre-auth, provider selection and credential
+injection post-auth) against two backend shapes MaaS supports: an in-cluster
+`LLMInferenceService` sim and an `ExternalModel`.
+
 ## Pins
 
 Version and namespace pins live in `forge.yaml` cluster `properties`. Stacks
@@ -107,6 +138,13 @@ echo "$API_KEY"
 
 ## Call models
 
+> Every request below crosses the full stock datapath — `Client → Istio
+> Gateway → IPP-pre → Kuadrant Auth → IPP-post → HTTPRoute → LLM sim` — with
+> Praxis standing in for IPP-pre/IPP-post per `MAAS_IPP_PROFILE=praxis`. What
+> to watch: the request succeeds identically to how it would against the
+> stock `llm-d` IPP profile — that equivalence, not the model's answer, is
+> the thing this demo is proving.
+
 Gateway LB (MetalLB on the Kind docker network — reachable from the Kind host):
 
 ```bash
@@ -116,6 +154,14 @@ GW=$(kubectl --context kind-maas-ipp-local -n istio-system \
 
 **Internal llm-d sim** (`LLMInferenceService` `sim-internal`):
 
+> Praxis's IPP-pre hop reads the `/llm-internal/sim-internal/...` path and
+> `model` field to resolve which MaaS-registered model this call targets
+> *before* Kuadrant decides whether the bearer token is allowed to call it.
+> Post-auth, IPP-post resolves `sim-internal` to its backing
+> `LLMInferenceService` and forwards — the same provider-selection step the
+> stock IPP container performs, just implemented by Praxis's filter chain
+> instead.
+
 ```bash
 curl -sk "https://${GW}/llm-internal/sim-internal/v1/chat/completions" \
   -H "Authorization: Bearer ${API_KEY}" \
@@ -124,6 +170,11 @@ curl -sk "https://${GW}/llm-internal/sim-internal/v1/chat/completions" \
 ```
 
 **External model** (`ExternalModel` `llm-katan-openai` — remote simulator must be reachable):
+
+> Same pre/post-auth contract, but IPP-post now resolves to an `ExternalModel`
+> instead of an in-cluster `LLMInferenceService` — the provider-boundary and
+> credential-injection step that matters most for customers routing to
+> models MaaS itself doesn't host.
 
 ```bash
 curl -sk "https://${GW}/llm/llm-katan-openai/v1/chat/completions" \
