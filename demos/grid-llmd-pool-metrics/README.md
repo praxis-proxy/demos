@@ -96,22 +96,29 @@ mTLS:     Grid operator -- HTTPS/mTLS -> nginx :9443
 
 ## Scoring and Routing Policy
 
-This demo explicitly selects Grid's queueDepth scoring strategy with
-routingPolicy: scoreFirst. The GridNetwork setting is:
+This demo ships two Forge config flavors that share the same
+resources/configs assets and differ only in which Grid scoring strategy the
+GridNetwork selects, both with routingPolicy: scoreFirst:
 
-    scoringPolicy:
-      strategy: queueDepth
+| Flavor | Forge config | GridNetwork setting |
+|---|---|---|
+| queueDepth (default) | `forge.yaml` | `scoringPolicy: { strategy: queueDepth }` |
+| kvCachePressure | `forge-kv-cache.yaml` | `scoringPolicy: { strategy: kvCachePressure }` |
+
+Run either with `./run.sh`; pass `--kv-cache` to select the second flavor
+(see [Quick Start](#quick-start) / [Full Mode](#full-mode) below).
 
 Grid normalizes the EPP queue depth using queueCapacity: 4 and computes the
-dynamic provider score as:
+dynamic provider score for the queueDepth flavor as:
 
     score = 1 - normalized_queue_depth
 
-The provider with the lower queue therefore receives the better dynamic score.
-KV-cache utilization is collected and shown in the live table as an important
-pressure signal, but it is not combined into this demo's Grid score. Grid
-selects one provider-level metric strategy at a time so the routing decision
-remains explainable.
+The provider with the lower queue therefore receives the better dynamic
+score. For the kvCachePressure flavor, the provider with the most available
+KV-cache capacity receives the better score instead. Both signals are always
+collected and shown in the live table regardless of which flavor is running,
+but Grid selects one provider-level metric strategy at a time so the routing
+decision remains explainable.
 
 Available strategies are:
 
@@ -122,7 +129,7 @@ Available strategies are:
 | kvCachePressure | Prefers the provider with the most available KV-cache capacity. |
 
 geographyFirst is the default routing policy and preserves locality ahead of
-score. This demo uses scoreFirst so a sufficiently better queue score can move
+score. This demo uses scoreFirst so a sufficiently better score can move
 traffic to the remote pool.
 
 ## Controlled Pressure
@@ -252,6 +259,16 @@ To validate an mTLS-protected metrics endpoint:
 
 Full mode adds the pressure-flip and recovery proofs.
 
+To run the same proofs against the kvCachePressure flavor instead:
+
+```bash
+./run.sh --full --kv-cache --teardown
+```
+
+`--kv-cache` selects `forge-kv-cache.yaml` in place of `forge.yaml`; every
+other flag (`--quick`, `--metrics-mtls`, `--teardown`, `--keep-on-failure`)
+works the same with either flavor.
+
 ## Teardown and Keep-on-Failure
 
 `--teardown` deletes both Kind clusters after the run, including on failure.
@@ -292,8 +309,8 @@ generator requests or with `MOCK_TIME_FACTOR_UNDER_LOAD > 1.0`.
 
 - No real GPU inference; vllm-vcr generates random tokens, so response content
   is meaningless.
-- No P99 latency or prefix-cache derivation; those signals are not used by the
-  selected queueDepth strategy.
+- No P99 latency or prefix-cache derivation; those signals are not used by
+  either the queueDepth or kvCachePressure strategy.
 - Two-pool topology; each cluster's own provider scores with full locality
   (1.0) while the remote peer scores at 0.5.
 - No cost signal; defaults to 0.5.

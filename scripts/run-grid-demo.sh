@@ -9,8 +9,12 @@ usage() {
 Usage: run-grid-demo.sh <demo-dir> [xtask-flags...]
 
 Environment:
-  GRID_REPO   Path to a local praxis-proxy/grid checkout.
-              When unset, Grid is cloned into .grid-checkout/.
+  GRID_REPO          Path to a local praxis-proxy/grid checkout.
+                     When unset, Grid is cloned into .grid-checkout/.
+  FORGE_CONFIG_NAME  Forge config filename within <demo-dir> (default: forge.yaml).
+                     Lets a demo ship multiple Forge config flavors side by
+                     side (e.g. forge-kv-cache.yaml) without duplicating its
+                     resources/configs assets.
 
 Image overrides (optional):
   GRID_XTASK_GATEWAY_IMAGE
@@ -62,7 +66,7 @@ case "${DEMO_NAME}" in
         ;;
 esac
 
-FORGE_CONFIG="${DEMO_DIR}/forge.yaml"
+FORGE_CONFIG="${DEMO_DIR}/${FORGE_CONFIG_NAME:-forge.yaml}"
 if [[ ! -f "${FORGE_CONFIG}" ]]; then
     echo "error: forge config not found: ${FORGE_CONFIG}" >&2
     exit 1
