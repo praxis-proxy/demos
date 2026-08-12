@@ -8,9 +8,14 @@
 #     praxis-proxy-filter's own builtins registry.
 # No manual filter registration.
 #
-# The `[patch.crates-io]` points praxis-proxy-* at our fork so the HIL
-# elicitation changes are included. Once those land upstream, drop the patch and
-# this builds against published praxis directly.
+# Previously `[patch]`ed praxis-proxy-* onto a personal HIL fork
+# (terylt/praxis:feat/hil_apl) pending upstream merge. Verified Aug 11 2026:
+# every piece of that fork's one remaining commit (elicitation error codes,
+# header carry, the on_request 401 fix, mcp metadata naming) is already
+# present in published praxis via later refactors (PR #820, #912, and
+# others) — confirmed by a clean 80/80-passing run of
+# praxis-proxy-filter's policy test suite on unpatched main. Patch dropped;
+# this now builds against published praxis directly.
 [package]
 name = "cpex-praxis-gateway"
 version = "0.1.0"
@@ -24,22 +29,16 @@ path = "src/main.rs"
 [dependencies]
 # praxis-ai's server (unmodified upstream) — registers the AI filters and
 # exposes `run_server`.
-praxis-ai-proxy = { git = "https://github.com/praxis-proxy/ai", rev = "47a0ffb2784790d14750cb3fa0b29fcd037e9555" }
+praxis-ai-proxy = { git = "https://github.com/praxis-proxy/ai", rev = "3ef40ace44dbb0e98dde84c83b504a490a1c30c5" }
 # Declared only to turn on the cpex/policy engine feature graph-wide.
-praxis-proxy-filter = { version = "0.4.0", features = ["cpex-policy-engine"] }
+# Pinned to the same git tag as `ai`'s own praxis-proxy-filter dependency
+# (rather than the crates.io registry version) so Cargo resolves a single
+# shared instance — otherwise the two sources produce two separate copies
+# of the crate, and the AI server's filter registry silently builds from
+# the copy that never had `cpex-policy-engine` enabled.
+praxis-proxy-filter = { git = "https://github.com/praxis-proxy/praxis.git", tag = "v0.5.2", features = ["cpex-policy-engine"] }
 clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 
 [target.'cfg(unix)'.dependencies]
 tikv-jemallocator = "0.7"
-
-# Source override: build praxis-proxy from our HIL fork instead of crates.io.
-# The patch points at `.praxis/` (relative, portable) — a symlink/checkout that
-# `build-gateway.sh` populates from PRAXIS_DIR or PRAXIS_GIT_URL (`.praxis` is
-# gitignored). Once the HIL changes are upstream, delete this whole section and
-# it builds against published praxis directly.
-[patch.crates-io]
-praxis-proxy-core = { path = ".praxis/core" }
-praxis-proxy-filter = { path = ".praxis/filter" }
-praxis-proxy-protocol = { path = ".praxis/protocol" }
-praxis-proxy-tls = { path = ".praxis/tls" }
