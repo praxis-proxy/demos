@@ -174,6 +174,8 @@ pressure.
 
 ## Registry Images
 
+These are the defaults used by `run.sh`; no preloaded local image is required.
+
 ```bash
 export GRID_XTASK_GATEWAY_IMAGE=ghcr.io/praxis-proxy/grid-ai-rollup:v0.1.3
 export GRID_XTASK_OPERATOR_IMAGE=ghcr.io/praxis-proxy/grid-operator:v0.1.3
@@ -182,6 +184,11 @@ export GRID_XTASK_VCR_IMAGE=ghcr.io/neuralmagic/vllm-vcr:vllm0.23
 export GRID_XTASK_OVERLAY_SYNC_IMAGE=ghcr.io/praxis-proxy/grid-overlay-sync:v0.1.3
 export GRID_XTASK_IMAGE_PULL_POLICY=IfNotPresent
 ```
+
+For AI development, set `GRID_XTASK_GATEWAY_IMAGE` to a local image built from
+a `praxis-proxy/ai` revision containing
+[`provider_route`](https://github.com/praxis-proxy/ai/pull/386), then set
+`GRID_XTASK_IMAGE_PULL_POLICY=Never`.
 
 Only the optional mTLS mode also needs nginx:
 

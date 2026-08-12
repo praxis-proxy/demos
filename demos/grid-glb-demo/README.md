@@ -78,11 +78,23 @@ the default used here.
 
 ## Registry Images
 
+These are the defaults used by `run.sh`; no preloaded local image is required.
+
 ```bash
 export GRID_XTASK_GATEWAY_IMAGE=ghcr.io/praxis-proxy/grid-ai-rollup:v0.1.3
 export GRID_XTASK_OPERATOR_IMAGE=ghcr.io/praxis-proxy/grid-operator:v0.1.3
 export GRID_XTASK_VCR_IMAGE=ghcr.io/neuralmagic/vllm-vcr:vllm0.23
 export GRID_XTASK_IMAGE_PULL_POLICY=IfNotPresent
+```
+
+For AI development, override the gateway with a locally built image and use
+`GRID_XTASK_IMAGE_PULL_POLICY=Never`. The selected `praxis-proxy/ai` revision
+must contain [`provider_route`](https://github.com/praxis-proxy/ai/pull/386):
+
+```bash
+export GRID_XTASK_GATEWAY_IMAGE=praxis-ai:dev
+export GRID_XTASK_OPERATOR_IMAGE=grid-operator:dev
+export GRID_XTASK_IMAGE_PULL_POLICY=Never
 ```
 
 ## Quick Start

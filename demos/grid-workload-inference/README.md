@@ -71,12 +71,19 @@ not by this cluster-local workload demo.
 
 ## Registry Images
 
+These are the defaults used by `run.sh`; no preloaded local image is required.
+
 ```bash
 export GRID_XTASK_GATEWAY_IMAGE=ghcr.io/praxis-proxy/grid-ai-rollup:v0.1.3
 export GRID_XTASK_OPERATOR_IMAGE=ghcr.io/praxis-proxy/grid-operator:v0.1.3
 export GRID_XTASK_VCR_IMAGE=ghcr.io/neuralmagic/vllm-vcr:vllm0.23
 export GRID_XTASK_IMAGE_PULL_POLICY=IfNotPresent
 ```
+
+For AI development, set `GRID_XTASK_GATEWAY_IMAGE` to a local image built from
+a `praxis-proxy/ai` revision containing
+[`provider_route`](https://github.com/praxis-proxy/ai/pull/386), then set
+`GRID_XTASK_IMAGE_PULL_POLICY=Never`.
 
 The provider clusters run
 [vllm-vcr](https://github.com/neuralmagic/vllm-vcr/blob/main/README.md) with

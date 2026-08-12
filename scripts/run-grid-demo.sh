@@ -27,6 +27,14 @@ DEMO_DIR="$(cd "$1" && pwd)"
 shift
 DEMO_NAME="$(basename "${DEMO_DIR}")"
 
+# Public demos are cold-startable by default. Local development images remain
+# available by setting these variables explicitly and using pull policy Never.
+export GRID_XTASK_GATEWAY_IMAGE="${GRID_XTASK_GATEWAY_IMAGE:-ghcr.io/praxis-proxy/grid-ai-rollup:v0.1.3}"
+export GRID_XTASK_OPERATOR_IMAGE="${GRID_XTASK_OPERATOR_IMAGE:-ghcr.io/praxis-proxy/grid-operator:v0.1.3}"
+export GRID_XTASK_OVERLAY_SYNC_IMAGE="${GRID_XTASK_OVERLAY_SYNC_IMAGE:-ghcr.io/praxis-proxy/grid-overlay-sync:v0.1.3}"
+export GRID_XTASK_VCR_IMAGE="${GRID_XTASK_VCR_IMAGE:-ghcr.io/neuralmagic/vllm-vcr:vllm0.23}"
+export GRID_XTASK_IMAGE_PULL_POLICY="${GRID_XTASK_IMAGE_PULL_POLICY:-IfNotPresent}"
+
 # Resolve or clone Grid repository.
 if [[ -z "${GRID_REPO:-}" ]]; then
     GRID_CLONE="${SCRIPT_DIR}/../.grid-checkout"
