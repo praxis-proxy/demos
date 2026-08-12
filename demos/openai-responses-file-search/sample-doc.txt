@@ -1,0 +1,42 @@
+Praxis AI Gateway — Quarterly Performance Report
+
+Executive Summary
+
+Praxis processed 4.7 million API requests in Q2 2025, with a 99.97% uptime
+across all production clusters. Average latency for proxied inference requests
+was 23ms (p50) and 89ms (p99), excluding model inference time.
+
+Key Metrics
+
+- Total requests processed: 4,712,583
+- Unique models served: 47 across 12 provider backends
+- Token throughput: 2.1 billion tokens (input + output combined)
+- Cache hit rate for response rehydration: 73.2%
+- MCP tool calls dispatched: 318,429 with a 99.4% success rate
+- File search callouts executed: 89,217 across 156 vector stores
+- Average fan-out per file search: 3.2 vector store queries
+
+Infrastructure
+
+The production deployment runs 8 Praxis instances behind a network load
+balancer. Each instance handles up to 1,200 concurrent connections with
+automatic backpressure via Pingora's H2 flow control. Filter pipelines
+are hot-reloaded without dropping connections — the Q2 rollout included
+14 pipeline updates with zero downtime.
+
+SQLite response stores are sharded by tenant, with automatic compaction
+running every 6 hours. PostgreSQL is used for cross-region conversation
+state where durability requirements exceed what SQLite provides.
+
+Security
+
+All inference traffic is authenticated via mTLS between Praxis and backend
+providers. The CPEX policy engine evaluated 1.3 million authorization
+decisions with Cedar policies, enforcing per-model and per-tenant access
+controls. Content guardrails (NeMo) flagged 0.02% of requests for review.
+
+Roadmap
+
+Q3 priorities include streaming support for agentic loops, cross-request
+conversation continuation, and expanded A2A protocol routing for
+multi-agent orchestration.

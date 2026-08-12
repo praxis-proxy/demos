@@ -1,15 +1,15 @@
 apiVersion: grid.praxis-proxy.io/v1alpha1
 kind: InferenceProvider
 metadata:
-  name: sim-east-provider-secondary
+  name: vcr-east-provider-secondary
 spec:
   gridNetworkRef: glb-demo
-  providerKind: simulator
-  backendKind: local_model
-  routingClusterRef: sim-east-provider-secondary
-  endpoint: http://mock-inference-secondary.grid-system.svc.cluster.local:8080
+  providerKind: vllm-vcr
+  backendKind: local
+  routingClusterRef: vcr-east-provider-secondary
+  endpoint: http://vcr-inference-secondary.grid-system.svc.cluster.local:8000
   models:
-    - name: sim-model-v1
+    - name: Qwen/Qwen3-0.6B
       capabilities: ["text_generation"]
       contextWindow: 4096
   siteSelector:
@@ -22,8 +22,3 @@ spec:
     path: /health
     interval: "30s"
     timeout: "5s"
-  metricsConfig:
-    path: /metrics
-    timeout: "2s"
-    signalNames:
-      queueDepth: grid_demo_queue_depth

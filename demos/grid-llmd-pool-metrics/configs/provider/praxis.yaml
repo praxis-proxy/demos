@@ -37,27 +37,27 @@ filter_chains:
             paths:
               - /v1/chat/completions
               - /v1/responses
-            cluster: sim-backend
+            cluster: vcr-backend
             credential:
               strategy: bearer_token
               secretRef:
-                name: sim-inference-credential
+                name: vcr-inference-credential
                 namespace: grid-system
                 key: token
 
       - filter: credential_inject
         credentials:
           - strategy: bearer_token
-            name: sim-inference-credential
+            name: vcr-inference-credential
             namespace: grid-system
             key: token
-            file: /etc/praxis/credentials/sim-inference/token
+            file: /etc/praxis/credentials/vcr-inference/token
 
       - filter: load_balancer
         clusters:
-          - name: sim-backend
+          - name: vcr-backend
             endpoints:
-              - "sim-service.grid-system.svc.cluster.local:8000"
+              - "vcr-service.grid-system.svc.cluster.local:8000"
 
 admin:
   address: "127.0.0.1:9901"

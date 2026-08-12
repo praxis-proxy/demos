@@ -1,22 +1,22 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: mock-inference-secondary
+  name: vcr-inference-secondary
   namespace: grid-system
   labels:
-    app.kubernetes.io/name: mock-inference
+    app.kubernetes.io/name: vllm-vcr
     app.kubernetes.io/instance: secondary
     app.kubernetes.io/part-of: grid-glb-demo
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: mock-inference
+      app.kubernetes.io/name: vllm-vcr
       app.kubernetes.io/instance: secondary
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: mock-inference
+        app.kubernetes.io/name: vllm-vcr
         app.kubernetes.io/instance: secondary
     spec:
       automountServiceAccountToken: false
@@ -27,59 +27,72 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       containers:
-        - name: mock-inference
-          image: "{{ cluster.properties.mockProviderImage }}"
+        - name: vcr
+          image: "{{ cluster.properties.vcrImage }}"
           imagePullPolicy: "{{ cluster.properties.imagePullPolicy }}"
-          args: ["--provider", "openai", "--port", "8080"]
           env:
-            - name: MOCK_PROVIDER_SITE
-              value: "east-provider-secondary"
-            - name: MOCK_QUEUE_DEPTH
-              value: "0.10"
-            - name: MOCK_EXPECTED_BEARER_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: mock-inference-secondary-credential
-                  key: token
+            - name: MODEL
+              value: "Qwen/Qwen3-0.6B"
+            - name: MOCK_PD_ROLE
+              value: "both"
+            - name: VLLM_PORT
+              value: "8000"
+            - name: MOCK_MAX_NUM_SEQS
+              value: "4"
+            - name: MOCK_KV_CACHE_SIZE
+              value: "64"
+            - name: MOCK_MAX_MODEL_LEN
+              value: "512"
+            - name: MOCK_TTFT_MS
+              value: "50"
+            - name: MOCK_ITL_MS
+              value: "20"
+            - name: MOCK_TIME_FACTOR_UNDER_LOAD
+              value: "2.0"
           ports:
             - name: http
-              containerPort: 8080
+              containerPort: 8000
           readinessProbe:
             httpGet:
               path: /health
-              port: 8080
-            initialDelaySeconds: 2
+              port: 8000
+            initialDelaySeconds: 5
             periodSeconds: 5
+          startupProbe:
+            httpGet:
+              path: /v1/models
+              port: 8000
+            periodSeconds: 10
+            failureThreshold: 60
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
               drop:
                 - ALL
-            readOnlyRootFilesystem: true
+            readOnlyRootFilesystem: false
             runAsNonRoot: true
           resources:
             requests:
-              cpu: 100m
-              memory: 64Mi
-            limits:
               cpu: 500m
-              memory: 256Mi
+              memory: 512Mi
+            limits:
+              memory: 2Gi
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: mock-inference-secondary
+  name: vcr-inference-secondary
   namespace: grid-system
   labels:
-    app.kubernetes.io/name: mock-inference
+    app.kubernetes.io/name: vllm-vcr
     app.kubernetes.io/instance: secondary
     app.kubernetes.io/part-of: grid-glb-demo
 spec:
   type: ClusterIP
   selector:
-    app.kubernetes.io/name: mock-inference
+    app.kubernetes.io/name: vllm-vcr
     app.kubernetes.io/instance: secondary
   ports:
     - name: http
-      port: 8080
-      targetPort: 8080
+      port: 8000
+      targetPort: 8000

@@ -30,49 +30,49 @@ filter_chains:
         emit_demo_attribution: true
         routes:
           - candidate_id: __GRID_CANDIDATE_ID__
-            model: sim-model-v1
+            model: Qwen/Qwen3-0.6B
             paths:
               - /v1/chat/completions
               - /v1/responses
-            cluster: mock-backend
+            cluster: vcr-backend
             credential:
               strategy: bearer_token
               secretRef:
-                name: mock-inference-credential
+                name: vcr-inference-credential
                 namespace: grid-system
                 key: token
           - candidate_id: __GRID_SECONDARY_CANDIDATE_ID__
-            model: sim-model-v1
+            model: Qwen/Qwen3-0.6B
             paths:
               - /v1/chat/completions
               - /v1/responses
-            cluster: mock-backend-secondary
+            cluster: vcr-backend-secondary
             credential:
               strategy: bearer_token
               secretRef:
-                name: mock-inference-secondary-credential
+                name: vcr-inference-secondary-credential
                 namespace: grid-system
                 key: token
       - filter: credential_inject
         credentials:
           - strategy: bearer_token
-            name: mock-inference-credential
+            name: vcr-inference-credential
             namespace: grid-system
             key: token
-            file: /etc/praxis/credentials/mock-inference/token
+            file: /etc/praxis/credentials/vcr-inference/token
           - strategy: bearer_token
-            name: mock-inference-secondary-credential
+            name: vcr-inference-secondary-credential
             namespace: grid-system
             key: token
-            file: /etc/praxis/credentials/mock-inference-secondary/token
+            file: /etc/praxis/credentials/vcr-inference-secondary/token
       - filter: load_balancer
         clusters:
-          - name: mock-backend
+          - name: vcr-backend
             endpoints:
-              - "mock-inference.grid-system.svc.cluster.local:8080"
-          - name: mock-backend-secondary
+              - "vcr-inference.grid-system.svc.cluster.local:8000"
+          - name: vcr-backend-secondary
             endpoints:
-              - "mock-inference-secondary.grid-system.svc.cluster.local:8080"
+              - "vcr-inference-secondary.grid-system.svc.cluster.local:8000"
 
 admin:
   address: "127.0.0.1:9901"

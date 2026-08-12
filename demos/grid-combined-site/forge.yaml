@@ -15,55 +15,49 @@ spec:
 
   clusters:
     - name: west
-      stacks: [metallb, west-operator-base, mock-providers, west-site, provider-gateway, consumer-gateway]
+      stacks: [metallb, west-operator-base, vcr-backend, west-site, provider-gateway, consumer-gateway]
       properties:
         region: west
         role: combined
         siteName: west
         gatewayImage: "praxis-ai:combined-site-demo"
         operatorImage: "grid-operator:combined-site-demo"
-        mockProviderImage: "grid-mock-providers:combined-site-demo"
-        imagePullPolicy: Never
+        vcrImage: "ghcr.io/neuralmagic/vllm-vcr:vllm0.23"
+        imagePullPolicy: IfNotPresent
         gatewayImageRepo: "praxis-ai"
         gatewayImageTag: "combined-site-demo"
         operatorImageRepo: "grid-operator"
         operatorImageTag: "combined-site-demo"
-        mockProviderImageRepo: "grid-mock-providers"
-        mockProviderImageTag: "combined-site-demo"
 
     - name: central
-      stacks: [metallb, central-operator-base, mock-providers, central-site, provider-gateway, consumer-gateway]
+      stacks: [metallb, central-operator-base, vcr-backend, central-site, provider-gateway, consumer-gateway]
       properties:
         region: central
         role: combined
         siteName: central
         gatewayImage: "praxis-ai:combined-site-demo"
         operatorImage: "grid-operator:combined-site-demo"
-        mockProviderImage: "grid-mock-providers:combined-site-demo"
-        imagePullPolicy: Never
+        vcrImage: "ghcr.io/neuralmagic/vllm-vcr:vllm0.23"
+        imagePullPolicy: IfNotPresent
         gatewayImageRepo: "praxis-ai"
         gatewayImageTag: "combined-site-demo"
         operatorImageRepo: "grid-operator"
         operatorImageTag: "combined-site-demo"
-        mockProviderImageRepo: "grid-mock-providers"
-        mockProviderImageTag: "combined-site-demo"
 
     - name: east
-      stacks: [metallb, east-operator-base, mock-providers, east-site, provider-gateway, consumer-gateway]
+      stacks: [metallb, east-operator-base, vcr-backend, east-site, provider-gateway, consumer-gateway]
       properties:
         region: east
         role: combined
         siteName: east
         gatewayImage: "praxis-ai:combined-site-demo"
         operatorImage: "grid-operator:combined-site-demo"
-        mockProviderImage: "grid-mock-providers:combined-site-demo"
-        imagePullPolicy: Never
+        vcrImage: "ghcr.io/neuralmagic/vllm-vcr:vllm0.23"
+        imagePullPolicy: IfNotPresent
         gatewayImageRepo: "praxis-ai"
         gatewayImageTag: "combined-site-demo"
         operatorImageRepo: "grid-operator"
         operatorImageTag: "combined-site-demo"
-        mockProviderImageRepo: "grid-mock-providers"
-        mockProviderImageTag: "combined-site-demo"
 
   stacks:
     metallb:
@@ -185,37 +179,17 @@ spec:
           timeout: "60s"
           interval: "2s"
 
-    mock-providers:
-      description: Mock inference backend for demo scenarios
+    vcr-backend:
+      description: vllm-vcr inference backend for demo scenarios
       steps:
         - type: manifest
           path: resources/common/grid-system-namespace.yaml
-        - type: helm
-          release: grid-mock-providers
-          chart: charts/grid-mock-providers
-          version: "0.1.0"
-          namespace: grid-system
-          values:
-            image:
-              repository: "{{ cluster.properties.mockProviderImageRepo }}"
-              tag: "{{ cluster.properties.mockProviderImageTag }}"
-              pullPolicy: "{{ cluster.properties.imagePullPolicy }}"
-            providers:
-              - name: "{{ cluster.name }}"
-                credentialSecret: mock-inference-credential
-                credentialKey: token
-                env:
-                  MOCK_PROVIDER_SITE: "{{ cluster.name }}"
-                  MOCK_QUEUE_DEPTH: "0.10"
-            resources:
-              requests:
-                cpu: 100m
-                memory: 64Mi
-              limits:
-                cpu: 500m
-                memory: 256Mi
+        - type: template-manifest
+          path: resources/common/vcr-provider-workload.yaml
+        - type: manifest
+          path: resources/common/backend-network-policy.yaml
         - type: wait
-          resource: deployment/mock-inference-{{ cluster.name }}
+          resource: deployment/vcr-inference-{{ cluster.name }}
           namespace: grid-system
           condition: available
           timeout: "120s"
@@ -257,11 +231,11 @@ spec:
               zone: west-1
               providerSiteLabel: west
             inferenceProviders:
-              - name: sim-west-provider
+              - name: vcr-west-provider
                 gridNetworkRef: grid-combined-site
-                providerKind: simulator
-                backendKind: local_model
-                endpoint: "http://mock-inference-west.grid-system.svc.cluster.local:8080"
+                providerKind: vllm-vcr
+                backendKind: local
+                endpoint: "http://vcr-inference-west.grid-system.svc.cluster.local:8000"
                 siteSelector:
                   matchLabels:
                     grid.praxis-proxy.io/provider-site: west
@@ -269,7 +243,7 @@ spec:
                   siteSelector:
                     matchLabels: {}
                 models:
-                  - name: mock-model
+                  - name: Qwen/Qwen3-0.6B
                     capabilities:
                       - text_generation
                     contextWindow: 4096
@@ -277,11 +251,6 @@ spec:
                   path: /health
                   interval: "30s"
                   timeout: "5s"
-                metricsConfig:
-                  path: /metrics
-                  timeout: "2s"
-                  signalNames:
-                    queueDepth: grid_demo_queue_depth
 
     central-site:
       description: Central combined site with Grid CRs via grid-site chart
@@ -320,11 +289,11 @@ spec:
               zone: central-1
               providerSiteLabel: central
             inferenceProviders:
-              - name: sim-central-provider
+              - name: vcr-central-provider
                 gridNetworkRef: grid-combined-site
-                providerKind: simulator
-                backendKind: local_model
-                endpoint: "http://mock-inference-central.grid-system.svc.cluster.local:8080"
+                providerKind: vllm-vcr
+                backendKind: local
+                endpoint: "http://vcr-inference-central.grid-system.svc.cluster.local:8000"
                 siteSelector:
                   matchLabels:
                     grid.praxis-proxy.io/provider-site: central
@@ -332,7 +301,7 @@ spec:
                   siteSelector:
                     matchLabels: {}
                 models:
-                  - name: mock-model
+                  - name: Qwen/Qwen3-0.6B
                     capabilities:
                       - text_generation
                     contextWindow: 4096
@@ -340,11 +309,6 @@ spec:
                   path: /health
                   interval: "30s"
                   timeout: "5s"
-                metricsConfig:
-                  path: /metrics
-                  timeout: "2s"
-                  signalNames:
-                    queueDepth: grid_demo_queue_depth
 
     east-site:
       description: East combined site with Grid CRs via grid-site chart
@@ -383,11 +347,11 @@ spec:
               zone: east-1
               providerSiteLabel: east
             inferenceProviders:
-              - name: sim-east-provider
+              - name: vcr-east-provider
                 gridNetworkRef: grid-combined-site
-                providerKind: simulator
-                backendKind: local_model
-                endpoint: "http://mock-inference-east.grid-system.svc.cluster.local:8080"
+                providerKind: vllm-vcr
+                backendKind: local
+                endpoint: "http://vcr-inference-east.grid-system.svc.cluster.local:8000"
                 siteSelector:
                   matchLabels:
                     grid.praxis-proxy.io/provider-site: east
@@ -395,7 +359,7 @@ spec:
                   siteSelector:
                     matchLabels: {}
                 models:
-                  - name: mock-model
+                  - name: Qwen/Qwen3-0.6B
                     capabilities:
                       - text_generation
                     contextWindow: 4096
@@ -403,11 +367,6 @@ spec:
                   path: /health
                   interval: "30s"
                   timeout: "5s"
-                metricsConfig:
-                  path: /metrics
-                  timeout: "2s"
-                  signalNames:
-                    queueDepth: grid_demo_queue_depth
 
     provider-gateway:
       description: Praxis provider gateway with mTLS and credential mounts
@@ -456,8 +415,8 @@ spec:
               enabled: true
               existingSecret: "provider-gateway-tls"
             credentials:
-              - name: "mock-inference-credential"
-                mountPath: "/etc/praxis/credentials/mock-inference"
+              - name: "vcr-inference-credential"
+                mountPath: "/etc/praxis/credentials/vcr-inference"
             podLabels:
               grid.praxis-proxy.io/backend-access: "provider-gateway"
               grid.praxis-proxy.io/provider-site: "{{ cluster.name }}"

@@ -31,7 +31,7 @@ resolved config.
 | Grid operator              |  | Grid operator              |
 +----------------------------+  +----------------------------+
 
-4 Kind clusters (GLB topology minus GTM), model=sim-model-v1
+4 Kind clusters (GLB topology minus GTM), model=Qwen/Qwen3-0.6B
 ```
 
 ## What It Proves
@@ -42,8 +42,24 @@ resolved config.
 - East and west workload Jobs succeed via in-cluster consumer gateway
 - Provider mTLS, peer authorization, and credential replacement enforced
 - NetworkPolicy isolates backends
+- VCR backend readiness and provider health availability are enforced
+- Explicit provider withdrawal causes health-based failover and recovery
 - Response attribution identifies the full routing path
 - Clean teardown of four clusters
+
+## Scoring and Routing Policy
+
+This demo uses the GLB topology's default `geographyFirst` routing policy and
+does not configure a dynamic provider metric strategy. The default `noMetrics`
+strategy therefore applies: health, admission, locality, freshness, and
+provider availability determine routing. The failover proof intentionally
+withdraws a provider's availability and verifies that traffic moves to a
+healthy provider, then returns after recovery.
+
+Grid also supports `scoreFirst` with `queueDepth` or `kvCachePressure` for
+deployments that expose comparable telemetry. Those metric-driven strategies
+are demonstrated by the [llm-d pool metrics demo](../grid-llmd-pool-metrics/),
+not by this cluster-local workload demo.
 
 ## Prerequisites
 
@@ -56,11 +72,17 @@ resolved config.
 ## Registry Images
 
 ```bash
-export GRID_XTASK_GATEWAY_IMAGE=ghcr.io/praxis-proxy/grid-ai-rollup:v0.1.1
-export GRID_XTASK_OPERATOR_IMAGE=ghcr.io/praxis-proxy/grid-operator:v0.1.1
-export GRID_XTASK_MOCK_PROVIDER_IMAGE=ghcr.io/praxis-proxy/grid-mock-providers:v0.1.1
+export GRID_XTASK_GATEWAY_IMAGE=ghcr.io/praxis-proxy/grid-ai-rollup:v0.1.3
+export GRID_XTASK_OPERATOR_IMAGE=ghcr.io/praxis-proxy/grid-operator:v0.1.3
+export GRID_XTASK_VCR_IMAGE=ghcr.io/neuralmagic/vllm-vcr:vllm0.23
 export GRID_XTASK_IMAGE_PULL_POLICY=IfNotPresent
 ```
+
+The provider clusters run
+[vllm-vcr](https://github.com/neuralmagic/vllm-vcr/blob/main/README.md) with
+the `Qwen/Qwen3-0.6B` model identifier. Its vllm-rs HTTP frontend serves the
+OpenAI-compatible endpoint while the VCR engine-core provides simulated
+inference behavior for the demo.
 
 ## Quick Start
 
@@ -95,7 +117,8 @@ Each run writes evidence to `.forge/evidence/`. See
 
 - No external ingress or public endpoint; add a traffic manager separately.
 - Kind networking does not represent production latency or failure modes.
-- Simulated inference providers return canned responses.
+- VCR backends provide simulated inference responses; this demo evaluates Grid
+  health and availability failover, not production model quality or throughput.
 - The forge.yaml is sourced from `grid-glb-demo/`; this demo has no
   independent forge config.
 

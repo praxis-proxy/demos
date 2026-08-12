@@ -8,9 +8,9 @@
 #     praxis-proxy-filter's own builtins registry.
 # No manual filter registration.
 #
-# The `[patch.crates-io]` points praxis-proxy-* at our fork so the HIL
-# elicitation changes are included. Once those land upstream, drop the patch and
-# this builds against published praxis directly.
+# The `[patch.crates-io]` points praxis-proxy-* at a local praxis checkout: no
+# published version carries the `policy-engine` feature yet. Once the engine port
+# ships, drop the patch and this builds against published praxis directly.
 [package]
 name = "cpex-praxis-gateway"
 version = "0.1.0"
@@ -24,8 +24,12 @@ path = "src/main.rs"
 [dependencies]
 # praxis-ai's server (unmodified upstream) — registers the AI filters and
 # exposes `run_server`.
-praxis-ai-proxy = { git = "https://github.com/praxis-proxy/ai", rev = "1cc0a47cf3032d465b623eeb4b8894cada961002", features = ["praxis-main"] }
-# Declared only to turn on the policy engine feature graph-wide.
+# `praxis-main` builds the AI filters against praxis from git, which is what the
+# `[patch]` below points them at.
+praxis-ai-proxy = { git = "https://github.com/praxis-proxy/ai", rev = "3ef40ace44dbb0e98dde84c83b504a490a1c30c5", features = ["praxis-main"] }
+# Declared only to turn on the policy engine feature graph-wide. Named by version
+# rather than pinned to a git tag: the `[patch]` below is global, so it also
+# redirects the AI server's own reference and the graph resolves one shared copy.
 praxis-proxy-filter = { version = "0.5", features = ["policy-engine"] }
 clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
@@ -33,12 +37,22 @@ tracing = "0.1"
 [target.'cfg(unix)'.dependencies]
 tikv-jemallocator = "0.7"
 
-# Source override: build praxis-proxy from our HIL fork instead of crates.io.
+# Source override: build praxis-proxy from a local checkout instead of crates.io.
 # The patch points at `.praxis/` (relative, portable) — a symlink/checkout that
 # `build-gateway.sh` populates from PRAXIS_DIR or PRAXIS_GIT_URL (`.praxis` is
-# gitignored). Once the HIL changes are upstream, delete this whole section and
-# it builds against published praxis directly.
+# gitignored). Once the engine port ships, delete this whole section and it
+# builds against published praxis directly.
 [patch.crates-io]
+praxis-proxy-core = { path = ".praxis/core" }
+praxis-proxy-filter = { path = ".praxis/filter" }
+praxis-proxy-protocol = { path = ".praxis/protocol" }
+praxis-proxy-tls = { path = ".praxis/tls" }
+
+# praxis-ai pins praxis-proxy-* by git tag, which `[patch.crates-io]` cannot
+# redirect. Without this second patch the graph carries two copies of the filter
+# and the AI server registers from the tagged one, which has no `policy-engine` —
+# so the `policy` filter silently never loads.
+[patch."https://github.com/praxis-proxy/praxis.git"]
 praxis-proxy-core = { path = ".praxis/core" }
 praxis-proxy-filter = { path = ".praxis/filter" }
 praxis-proxy-protocol = { path = ".praxis/protocol" }

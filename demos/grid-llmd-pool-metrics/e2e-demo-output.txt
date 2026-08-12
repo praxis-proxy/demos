@@ -1,31 +1,31 @@
 Demo:         grid-llmd-pool-metrics
 Subcommand:   run-grid-llmd-pool-metrics-demo
-Forge config: /home/ubuntu/praxxis/ai-grid/prs/sim-vcr-aigrid/demos/demos/grid-llmd-pool-metrics/forge.yaml
-Demo root:    /home/ubuntu/praxxis/ai-grid/prs/sim-vcr-aigrid/demos/demos/grid-llmd-pool-metrics
-Grid repo:    /home/ubuntu/praxxis/ai-grid/prs/sim-vcr-aigrid/grid
+Forge config: demos/demos/grid-llmd-pool-metrics/forge.yaml
+Demo root:    demos/demos/grid-llmd-pool-metrics
+Grid repo:    <grid-repository>
 
-   Compiling xtask v0.1.2 (/home/ubuntu/praxxis/ai-grid/prs/sim-vcr-aigrid/grid/xtask)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.16s
-   Compiling xtask v0.1.2 (/home/ubuntu/praxxis/ai-grid/prs/sim-vcr-aigrid/grid/xtask)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.11s
-     Running `target/debug/xtask env run-grid-llmd-pool-metrics-demo --forge-config /home/ubuntu/praxxis/ai-grid/prs/sim-vcr-aigrid/demos/demos/grid-llmd-pool-metrics/forge.yaml --full --teardown --keep-on-failure`
+   Compiling xtask v0.1.3 (grid/xtask)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.02s
+   Compiling xtask v0.1.3 (grid/xtask)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.95s
+     Running `target/debug/xtask env run-grid-llmd-pool-metrics-demo --forge-config demos/demos/grid-llmd-pool-metrics/forge.yaml --quick --teardown`
 ===============================================================================
 Grid llm-d Pool-Metrics Routing Demo
-Mode: full
+Mode: quick
 Metrics transport: direct-http
-Forge config: /home/ubuntu/praxxis/ai-grid/prs/sim-vcr-aigrid/demos/demos/grid-llmd-pool-metrics/forge.yaml
-Demo root:    /home/ubuntu/praxxis/ai-grid/prs/sim-vcr-aigrid/demos/demos/grid-llmd-pool-metrics
+Forge config: demos/demos/grid-llmd-pool-metrics/forge.yaml
+Demo root:    demos/demos/grid-llmd-pool-metrics
 ===============================================================================
   Images:
-    gateway:      ghcr.io/praxis-proxy/grid-ai-rollup:v0.1.1
-    operator:     ghcr.io/praxis-proxy/grid-operator:v0.1.2
+    gateway:      ghcr.io/praxis-proxy/grid-ai-rollup:v0.1.3
+    operator:     ghcr.io/praxis-proxy/grid-operator:v0.1.3
     epp:          ghcr.io/llm-d/llm-d-inference-scheduler:v0.8.0
     vcr:          ghcr.io/neuralmagic/vllm-vcr:vllm0.23
-    overlay-sync: ghcr.io/praxis-proxy/grid-overlay-sync:v0.1.2
+    overlay-sync: ghcr.io/praxis-proxy/grid-overlay-sync:v0.1.3
   registry image mode: images will be pulled by each cluster
 
 [SETUP 1/10] Validating Forge config
-  [OK] Config: /home/ubuntu/praxxis/ai-grid/prs/sim-vcr-aigrid/demos/demos/grid-llmd-pool-metrics/.forge.resolved.yaml
+  [OK] Config: demos/demos/grid-llmd-pool-metrics/.forge.resolved.yaml
 
 [SETUP 2/10] Generating TLS certificates (gateway only)
   reusing existing CA certificate
@@ -44,16 +44,12 @@ Demo root:    /home/ubuntu/praxxis/ai-grid/prs/sim-vcr-aigrid/demos/demos/grid-l
   [OK] pool-b: MetalLB and operator ready
 
 [SETUP 6/10] Seeding SWIM cross-cluster membership
-  pool-a: SWIM LB IP = 172.19.255.231
-  pool-b: SWIM LB IP = 172.19.255.211
-  pool-a: seeds=172.19.255.211:7946
-  pool-b: seeds=172.19.255.231:7946
-Waiting for deployment "grid-operator" rollout to finish: 1 old replicas are pending termination...
-Waiting for deployment "grid-operator" rollout to finish: 1 old replicas are pending termination...
+  pool-a: SWIM LB IP = 172.18.255.231
+  pool-b: SWIM LB IP = 172.18.255.211
+  pool-a: seeds=172.18.255.211:7946
+  pool-b: seeds=172.18.255.231:7946
 deployment "grid-operator" successfully rolled out
   [OK] pool-a: operator restarted with SWIM seeds
-Waiting for deployment "grid-operator" rollout to finish: 1 old replicas are pending termination...
-Waiting for deployment "grid-operator" rollout to finish: 1 old replicas are pending termination...
 deployment "grid-operator" successfully rolled out
   [OK] pool-b: operator restarted with SWIM seeds
 
@@ -62,13 +58,13 @@ deployment "grid-operator" successfully rolled out
   [OK] pool-b: vcr-1, vcr-2, and EPP running
 
 [SETUP 8/10] Installing provider trust and credentials
-secret/consumer-gateway-tls created
-secret/provider-gateway-tls created
-secret/sim-inference-credential created
+secret/consumer-gateway-tls unchanged
+secret/provider-gateway-tls unchanged
+secret/vcr-inference-credential created
   [OK] pool-a: TLS secrets and credentials installed
-secret/consumer-gateway-tls created
-secret/provider-gateway-tls created
-secret/sim-inference-credential created
+secret/consumer-gateway-tls unchanged
+secret/provider-gateway-tls unchanged
+secret/vcr-inference-credential created
   [OK] pool-b: TLS secrets and credentials installed
 
 [SETUP 9/10] Deploying Grid site resources and gateways
@@ -106,89 +102,21 @@ ENVIRONMENT READY - Starting proof scenarios
   State: BASELINE
 
                    Queue  Capacity  Pressure  KV Cache   Score  Rank
-       Cluster A     0.0         4      0.00      0.00   11.00     0
-       Cluster B     0.0         4      0.00      0.00    9.50     1
+       Cluster A     0.0         4      0.00      1.00    1.00     0
+       Cluster B     0.0         4      0.00      1.00    1.00     1
 
           Signal Locality Queue    KV Prefix Latency  Cost  Total
-       Cluster A     3.00  3.00  2.00   1.00    1.00  1.00  11.00
-       Cluster B     1.50  3.00  2.00   1.00    1.00  1.00   9.50
+       Cluster A     0.00  1.00  0.00   0.00    0.00  0.00   1.00
+       Cluster B     0.00  1.00  0.00   0.00    0.00  0.00   1.00
 
   Grid preference: CLUSTER A
   Reason: Both pools idle. Pool A outscores Pool B on locality (local=3.0 vs remote=1.5).
-
-
-  [PRESSURE] Starting pressure generator through the consumer gateway
-    replicas:    6
-    workers:     4 per replica (total 24)
-    gateway:     consumer-gateway.grid-system:8080
-    model:       Qwen/Qwen3-0.6B
-    max_tokens:  64
-deployment.apps/pressure-generator scaled
-Waiting for deployment "pressure-generator" rollout to finish: 0 of 6 updated replicas are available...
-Waiting for deployment "pressure-generator" rollout to finish: 1 of 6 updated replicas are available...
-Waiting for deployment "pressure-generator" rollout to finish: 2 of 6 updated replicas are available...
-Waiting for deployment "pressure-generator" rollout to finish: 3 of 6 updated replicas are available...
-Waiting for deployment "pressure-generator" rollout to finish: 4 of 6 updated replicas are available...
-deployment "pressure-generator" successfully rolled out
-  [OK] pool-a: pressure-generator scaled to 6
-
-  Live Metrics Table
-    Queue/KV/Score/Rank: derived from the Grid overlay (production scoring engine)
-    A_REQ/B_REQ:        cumulative gateway attribution counts from pressure pods
-    LAST_ROUTE:         most recent confirmed request destination
-
-  TIME   PHASE       A_QUEUE  A_KV A_SCORE A_RANK  B_QUEUE  B_KV B_SCORE B_RANK  A_REQ B_REQ LAST_ROUTE
-  00:02  BASELINE        0.0 0.00   11.00      0      0.0 0.00    9.50      1      0     0          -
-  [PRESSURE] Pool A queue/KV pressure is increasing (queue=8.0)
-  00:04  FAILOVER        4.0 0.02    7.97      1      0.0 0.00    9.50      0      0     0          -
-  [SCORING] Pool A score=7.97 rank=1; Pool B score=9.50 rank=0 (gap=1.53)
-  [FAILOVER] Pool B is now preferred; sending verification request
-  [TRAFFIC SHIFT] Request attributed to pool-b
-    load stats: total=0 ok=0 fail=0 | a=0 b=0
-
-  LLM-D POOL ROUTING DECISION
-  State: FAILOVER
-
-                   Queue  Capacity  Pressure  KV Cache   Score  Rank
-       Cluster A     4.0         4      1.00      0.02    7.97     1
-       Cluster B     0.0         4      0.00      0.00    9.50     0
-
-          Signal Locality Queue    KV Prefix Latency  Cost  Total
-       Cluster B     1.50  3.00  2.00   1.00    1.00  1.00   9.50
-       Cluster A     3.00  0.00  1.97   1.00    1.00  1.00   7.97
-
-  Grid preference: CLUSTER B
-  Reason: Pool A pressure lowered its queue/KV scores, so Pool B became rank 0.
-
-
-  [RECOVERY] Stopping pressure generator
-    final load: total=190 ok=104 fail=86 | pool-a=69 pool-b=35
-deployment.apps/pressure-generator scaled
-  [OK] pool-a: pressure-generator scaled to 0
-  [RECOVERY] Pressure stopped; waiting for Pool A to drain and regain rank 0
-  00:26  RECOVERY        0.0 0.01   10.98      0      4.0 0.02    6.47      1     69    35          -
-  [RECOVERY] Pool A queue drained (queue=0.0); sending verification request
-  [RECOVERED] Pool A is preferred again; request attributed to pool-a
-
-  LLM-D POOL ROUTING DECISION
-  State: RECOVERED
-
-                   Queue  Capacity  Pressure  KV Cache   Score  Rank
-       Cluster A     0.0         4      0.00      0.01   10.98     0
-       Cluster B     4.0         4      1.00      0.02    6.47     1
-
-          Signal Locality Queue    KV Prefix Latency  Cost  Total
-       Cluster A     3.00  3.00  1.98   1.00    1.00  1.00  10.98
-       Cluster B     1.50  0.00  1.97   1.00    1.00  1.00   6.47
-
-  Grid preference: CLUSTER A
-  Reason: Pressure stopped; Pool A drained and regained rank 0.
 
 
 [TEARDOWN] Removing Kind clusters
   [OK] Teardown complete
 
 ===============================================================================
-DEMO PASSED  (262.9s)
-Evidence: /home/ubuntu/praxxis/ai-grid/prs/sim-vcr-aigrid/demos/demos/grid-llmd-pool-metrics/evidence/20260807T062340Z/evidence.json
+DEMO PASSED  (105.0s)
+Evidence: demos/demos/grid-llmd-pool-metrics/evidence/20260809T032519Z/evidence.json
 ===============================================================================

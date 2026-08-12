@@ -1,30 +1,30 @@
 Demo:         grid-llmd-pool-metrics
 Subcommand:   run-grid-llmd-pool-metrics-demo
-Forge config: /home/ubuntu/praxxis/ai-grid/prs/sim-vcr-aigrid/demos/demos/grid-llmd-pool-metrics/forge.yaml
-Demo root:    /home/ubuntu/praxxis/ai-grid/prs/sim-vcr-aigrid/demos/demos/grid-llmd-pool-metrics
-Grid repo:    /home/ubuntu/praxxis/ai-grid/prs/sim-vcr-aigrid/grid
+Forge config: demos/demos/grid-llmd-pool-metrics/forge.yaml
+Demo root:    demos/demos/grid-llmd-pool-metrics
+Grid repo:    <grid-repository>
 
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.14s
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s
-     Running `target/debug/xtask env run-grid-llmd-pool-metrics-demo --forge-config /home/ubuntu/praxxis/ai-grid/prs/sim-vcr-aigrid/demos/demos/grid-llmd-pool-metrics/forge.yaml --quick --metrics-mtls --teardown --keep-on-failure`
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running `target/debug/xtask env run-grid-llmd-pool-metrics-demo --forge-config demos/demos/grid-llmd-pool-metrics/forge.yaml --quick --metrics-mtls --teardown`
 ===============================================================================
 Grid llm-d Pool-Metrics Routing Demo
 Mode: quick
 Metrics transport: mtls-proxy
-Forge config: /home/ubuntu/praxxis/ai-grid/prs/sim-vcr-aigrid/demos/demos/grid-llmd-pool-metrics/forge.yaml
-Demo root:    /home/ubuntu/praxxis/ai-grid/prs/sim-vcr-aigrid/demos/demos/grid-llmd-pool-metrics
+Forge config: demos/demos/grid-llmd-pool-metrics/forge.yaml
+Demo root:    demos/demos/grid-llmd-pool-metrics
 ===============================================================================
   Images:
-    gateway:      ghcr.io/praxis-proxy/grid-ai-rollup:v0.1.1
-    operator:     ghcr.io/praxis-proxy/grid-operator:v0.1.2
+    gateway:      ghcr.io/praxis-proxy/grid-ai-rollup:v0.1.3
+    operator:     ghcr.io/praxis-proxy/grid-operator:v0.1.3
     epp:          ghcr.io/llm-d/llm-d-inference-scheduler:v0.8.0
     vcr:          ghcr.io/neuralmagic/vllm-vcr:vllm0.23
-    overlay-sync: ghcr.io/praxis-proxy/grid-overlay-sync:v0.1.2
+    overlay-sync: ghcr.io/praxis-proxy/grid-overlay-sync:v0.1.3
     nginx:        docker.io/library/nginx:1.27.4-alpine
   registry image mode: images will be pulled by each cluster
 
 [SETUP 1/11] Validating Forge config
-  [OK] Config: /home/ubuntu/praxxis/ai-grid/prs/sim-vcr-aigrid/demos/demos/grid-llmd-pool-metrics/.forge.resolved.yaml
+  [OK] Config: demos/demos/grid-llmd-pool-metrics/.forge.resolved.yaml
 
 [SETUP 2/11] Generating TLS certificates (gateway + metrics)
   reusing existing CA certificate
@@ -44,10 +44,10 @@ Demo root:    /home/ubuntu/praxxis/ai-grid/prs/sim-vcr-aigrid/demos/demos/grid-l
   [OK] pool-b: MetalLB and operator ready
 
 [SETUP 6/11] Seeding SWIM cross-cluster membership
-  pool-a: SWIM LB IP = 172.19.255.231
-  pool-b: SWIM LB IP = 172.19.255.211
-  pool-a: seeds=172.19.255.211:7946
-  pool-b: seeds=172.19.255.231:7946
+  pool-a: SWIM LB IP = 172.18.255.231
+  pool-b: SWIM LB IP = 172.18.255.211
+  pool-a: seeds=172.18.255.211:7946
+  pool-b: seeds=172.18.255.231:7946
 Waiting for deployment "grid-operator" rollout to finish: 1 old replicas are pending termination...
 Waiting for deployment "grid-operator" rollout to finish: 1 old replicas are pending termination...
 deployment "grid-operator" successfully rolled out
@@ -74,11 +74,11 @@ secret/metrics-client-tls created
 [SETUP 9/11] Installing provider trust and credentials
 secret/consumer-gateway-tls created
 secret/provider-gateway-tls created
-secret/sim-inference-credential created
+secret/vcr-inference-credential created
   [OK] pool-a: TLS secrets and credentials installed
 secret/consumer-gateway-tls created
 secret/provider-gateway-tls created
-secret/sim-inference-credential created
+secret/vcr-inference-credential created
   [OK] pool-b: TLS secrets and credentials installed
 
 [SETUP 10/11] Deploying Grid site resources and gateways
@@ -116,12 +116,12 @@ ENVIRONMENT READY - Starting proof scenarios
   State: BASELINE
 
                    Queue  Capacity  Pressure  KV Cache   Score  Rank
-       Cluster A     0.0         4      0.00      0.00   11.00     0
-       Cluster B     0.0         4      0.00      0.00    9.50     1
+       Cluster A     0.0         4      0.00      1.00    1.00     0
+       Cluster B     0.0         4      0.00      1.00    1.00     1
 
           Signal Locality Queue    KV Prefix Latency  Cost  Total
-       Cluster A     3.00  3.00  2.00   1.00    1.00  1.00  11.00
-       Cluster B     1.50  3.00  2.00   1.00    1.00  1.00   9.50
+       Cluster A     0.00  1.00  0.00   0.00    0.00  0.00   1.00
+       Cluster B     0.00  1.00  0.00   0.00    0.00  0.00   1.00
 
   Grid preference: CLUSTER A
   Reason: Both pools idle. Pool A outscores Pool B on locality (local=3.0 vs remote=1.5).
@@ -147,13 +147,13 @@ secret/metrics-ca configured
 secret/metrics-client-tls unchanged
 
   [TLS 6/9] Stale-cache TTL
-    baseline: pool-a observable, score=11.00
+    baseline: pool-a observable, score=1.00
 secret "metrics-client-tls" deleted from grid-system namespace
     deleted Secret/metrics-client-tls to break TLS (staleMetricsSeconds=20)
-    inside-TTL (2s/20s): pool-a still observable, score=11.00 (cached metrics served)
+    inside-TTL (2s/20s): pool-a still observable, score=1.00 (cached metrics served)
     post-TTL (28s/20s): pool-a unobservable (cached metrics expired, UNOBSERVABLE_METRICS applied)
 secret/metrics-client-tls created
-    recovery: pool-a observable after client cert restored, score=11.00
+    recovery: pool-a observable after client cert restored, score=1.00
 
   [TLS 7/9] Client Secret rotation
 secret/metrics-client-tls configured
@@ -168,22 +168,22 @@ deployment "llmd-epp" successfully rolled out
   [TLS 9/9] Existing routing behavior
 
   Restart accounting
-    pool-a/operator/grid-operator-77bfdd54b4-qdkq9: uid unchanged, restart_count=0
-    pool-a/epp/llmd-epp-f844489c6-vj4vb: new pod after server cert rotation (expected), restart_count=0
-    pool-a/gateway/consumer-gateway-69786c4c8b-fczw2: overlay-sync restarts=0
-    pool-a/gateway/consumer-gateway-69786c4c8b-fczw2: praxis restarts=0
-    pool-a/gateway/provider-gateway-58bc5bbcc6-kqrxh: praxis restarts=0
-    pool-b/operator/grid-operator-6b688d9f7c-zzfcz: uid unchanged, restart_count=0
-    pool-b/epp/llmd-epp-5ffbc46b56-bp5kq: uid unchanged, restart_count=0
-    pool-b/gateway/consumer-gateway-66b75f84dc-d9d29: overlay-sync restarts=0
-    pool-b/gateway/consumer-gateway-66b75f84dc-d9d29: praxis restarts=0
-    pool-b/gateway/provider-gateway-564df88cdf-6lfdr: praxis restarts=0
+    pool-a/operator/grid-operator-676cddfb7f-jck6z: uid unchanged, restart_count=0
+    pool-a/epp/llmd-epp-6f6784d98c-x6zq9: new pod after server cert rotation (expected), restart_count=0
+    pool-a/gateway/consumer-gateway-784dddf974-xbfnc: overlay-sync restarts=0
+    pool-a/gateway/consumer-gateway-784dddf974-xbfnc: praxis restarts=0
+    pool-a/gateway/provider-gateway-67797f8694-77982: praxis restarts=0
+    pool-b/operator/grid-operator-64bf6855db-6ckhk: uid unchanged, restart_count=0
+    pool-b/epp/llmd-epp-5ffbc46b56-n896q: uid unchanged, restart_count=0
+    pool-b/gateway/consumer-gateway-597f8cf9ff-q6dwt: overlay-sync restarts=0
+    pool-b/gateway/consumer-gateway-597f8cf9ff-q6dwt: praxis restarts=0
+    pool-b/gateway/provider-gateway-6ff6d9f555-44cbf: praxis restarts=0
     server rotation (stage 8) on pool-a: EPP rollout restart is expected — nginx does not reload TLS in-place
 
 [TEARDOWN] Removing Kind clusters
   [OK] Teardown complete
 
 ===============================================================================
-DEMO PASSED  (333.3s)
-Evidence: /home/ubuntu/praxxis/ai-grid/prs/sim-vcr-aigrid/demos/demos/grid-llmd-pool-metrics/evidence/20260807T062828Z/evidence.json
+DEMO PASSED  (290.8s)
+Evidence: demos/demos/grid-llmd-pool-metrics/evidence/20260809T033122Z/evidence.json
 ===============================================================================

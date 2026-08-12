@@ -1,19 +1,19 @@
 apiVersion: grid.praxis-proxy.io/v1alpha1
 kind: InferenceProvider
 metadata:
-  name: sim-west-provider
+  name: vcr-west-provider
 spec:
   gridNetworkRef: grid-combined-site
-  providerKind: simulator
-  backendKind: local_model
-  endpoint: http://mock-inference.grid-system.svc.cluster.local:8080
+  providerKind: vllm-vcr
+  backendKind: local
+  endpoint: http://vcr-inference-west.grid-system.svc.cluster.local:8000
   models:
-    - name: mock-model
+    - name: Qwen/Qwen3-0.6B
       capabilities: ["text_generation"]
       contextWindow: 4096
   siteSelector:
     matchLabels:
-      grid.praxis-proxy.io/combined-site: west
+      grid.praxis-proxy.io/provider-site: west
   accessPolicy:
     siteSelector:
       matchLabels: {}
@@ -21,8 +21,3 @@ spec:
     path: /health
     interval: "30s"
     timeout: "5s"
-  metricsConfig:
-    path: /metrics
-    timeout: "2s"
-    signalNames:
-      queueDepth: grid_demo_queue_depth

@@ -1,22 +1,22 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: vcr-inference
+  name: vcr-inference-{{ cluster.name }}
   namespace: grid-system
   labels:
     app.kubernetes.io/name: vllm-vcr
-    app.kubernetes.io/part-of: grid-glb-demo
+    app.kubernetes.io/part-of: grid-combined-site
 spec:
   replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: vllm-vcr
-      app.kubernetes.io/instance: primary
+      app.kubernetes.io/instance: "{{ cluster.name }}"
   template:
     metadata:
       labels:
         app.kubernetes.io/name: vllm-vcr
-        app.kubernetes.io/instance: primary
+        app.kubernetes.io/instance: "{{ cluster.name }}"
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -29,17 +29,34 @@ spec:
         - name: vcr
           image: "{{ cluster.properties.vcrImage }}"
           imagePullPolicy: "{{ cluster.properties.imagePullPolicy }}"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: false
+            runAsNonRoot: true
           env:
             - name: MODEL
               value: "Qwen/Qwen3-0.6B"
             - name: MOCK_PD_ROLE
               value: "both"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
             - name: VLLM_PORT
               value: "8000"
             - name: MOCK_MAX_NUM_SEQS
               value: "4"
             - name: MOCK_KV_CACHE_SIZE
               value: "64"
+            - name: MOCK_TOKENS_PER_BLOCK
+              value: "16"
             - name: MOCK_MAX_MODEL_LEN
               value: "512"
             - name: MOCK_TTFT_MS
@@ -51,25 +68,27 @@ spec:
           ports:
             - name: http
               containerPort: 8000
-          readinessProbe:
-            httpGet:
-              path: /health
-              port: 8000
-            initialDelaySeconds: 5
-            periodSeconds: 5
           startupProbe:
             httpGet:
               path: /v1/models
               port: 8000
+            initialDelaySeconds: 5
             periodSeconds: 10
+            timeoutSeconds: 5
             failureThreshold: 60
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop:
-                - ALL
-            readOnlyRootFilesystem: false
-            runAsNonRoot: true
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
           resources:
             requests:
               cpu: 500m
@@ -80,16 +99,16 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: vcr-inference
+  name: vcr-inference-{{ cluster.name }}
   namespace: grid-system
   labels:
     app.kubernetes.io/name: vllm-vcr
-    app.kubernetes.io/part-of: grid-glb-demo
+    app.kubernetes.io/part-of: grid-combined-site
 spec:
   type: ClusterIP
   selector:
     app.kubernetes.io/name: vllm-vcr
-    app.kubernetes.io/instance: primary
+    app.kubernetes.io/instance: "{{ cluster.name }}"
   ports:
     - name: http
       port: 8000

@@ -41,31 +41,31 @@ filter_chains:
         emit_demo_attribution: true
         routes:
           - candidate_id: "CANDIDATE_ID_PLACEHOLDER"
-            model: mock-model
+            model: Qwen/Qwen3-0.6B
             paths:
               - /v1/chat/completions
               - /v1/responses
-            cluster: mock-backend
+            cluster: vcr-backend
             credential:
               strategy: bearer_token
               secretRef:
-                name: mock-inference-credential
+                name: vcr-inference-credential
                 namespace: grid-system
                 key: token
 
       - filter: credential_inject
         credentials:
           - strategy: bearer_token
-            name: mock-inference-credential
+            name: vcr-inference-credential
             namespace: grid-system
             key: token
-            file: /etc/praxis/credentials/mock-inference/token
+            file: /etc/praxis/credentials/vcr-inference/token
 
       - filter: load_balancer
         clusters:
-          - name: mock-backend
+          - name: vcr-backend
             endpoints:
-              - "mock-inference-SITE_PLACEHOLDER.grid-system.svc.cluster.local:8080"
+              - "vcr-inference-SITE_PLACEHOLDER.grid-system.svc.cluster.local:8000"
 
 admin:
   address: "127.0.0.1:9901"

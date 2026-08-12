@@ -18,6 +18,7 @@ Each demo lives under `demos/<name>/` with its own README and bring-up script.
 | [openai-conversations-multi-turn](demos/openai-conversations-multi-turn/) | Multi-turn via `conversation` field — create a conversation, reference it by ID on each turn. Praxis rehydrates stored items, forwards full context to vLLM, and auto-appends input+output back to the conversation. |
 | [openai-responses-file-resolve](demos/openai-responses-file-resolve/) | File resolution + document extraction — send a `file_id` in a Responses API request, Praxis resolves it via OGX, extracts text content, and converts `input_file` → `input_text` for vLLM. |
 | [openai-responses-agentic-loop](demos/openai-responses-agentic-loop/) | Server-side agentic loop — model calls an MCP tool, Praxis dispatches to the MCP server and loops the result back to the model for a final answer. No client-side orchestration needed. |
+| [openai-responses-file-search](demos/openai-responses-file-search/) | Server-side file search — model calls file_search, Praxis dispatches to OGX's vector store search API, loops back with ranked results, and the model answers grounded in retrieved documents. |
 | [skillberry-agent-proxy](demos/skillberry-agent-proxy/) | A fully automated demo of Praxis as an agentic gateway for the Skillberry Agent platform, based on [skillberry-agent-praxis-poc](https://github.com/skillberry-ai/skillberry-agent-praxis-poc) |
 
 ## Grid QuickStarts
@@ -42,6 +43,11 @@ Script-driven Grid demos and reference guides for specific topics.
 |------|-------------|
 | [grid-route53-edge-entry](demos/grid-route53-edge-entry/) | Route 53 DNS edge selection with Grid provider routing on existing OpenShift clusters |
 | [grid-metrics-mtls](demos/grid-metrics-mtls/) | Secret-backed TLS and mTLS for InferenceProvider metrics scraping |
+
+## MaaS Labs
+
+| Demo | Description |
+|------|-------------|
 | [maas-ipp](demos/maas-ipp/) | Single-cluster MaaS IPP lab reproducing the stock MaaS Kind datapath with Forge |
 
 ## Layout

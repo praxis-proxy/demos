@@ -133,7 +133,7 @@ the upstream API.
 ## Quick Start
 
 ```bash
-git clone https://github.com/nerdalert/demos.git
+git clone https://github.com/praxis-proxy/demos.git
 cd demos/demos/openai-responses-codex-passthrough
 cp .env.example .env
 chmod 600 .env

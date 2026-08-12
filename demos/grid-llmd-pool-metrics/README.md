@@ -1,10 +1,10 @@
 # Grid LLM-d Pool Metrics Demo
 
-Proves that real vLLM frontend metrics drive EPP aggregation, Grid scoring,
-overlay publication, and Praxis routing decisions across two Kind clusters.
-Each cluster runs two vllm-vcr inference backends (vllm-rs frontend + vllm-vcr
-mock engine-core) that produce standard vLLM Prometheus metrics from actual
-HTTP request processing. Every other component -- llm-d EPP, Grid operator,
+Proves that metrics from vllm-vcr drive EPP aggregation, Grid scoring, overlay
+publication, and Praxis routing decisions across two Kind clusters. Each
+cluster runs two vllm-vcr inference backends: a vllm-rs HTTP frontend paired
+with the vllm-vcr mock engine-core. The frontend exposes vLLM-compatible
+Prometheus metrics, while every other component -- llm-d EPP, Grid operator,
 overlay delivery, Praxis routing -- runs its production code path.
 
 No GPU or model weights are required. The vllm-rs frontend downloads only the
@@ -26,7 +26,7 @@ tokenizer from Hugging Face at startup.
           +----------+------+   +--------+--------+
           |    pool-a       |   |    pool-b        |
           |                 |   |                  |
-          | sim-1 sim-2     |   | sim-1 sim-2      |
+          | vcr-1 vcr-2     |   | vcr-1 vcr-2      |
           |  (vllm-vcr)     |   |  (vllm-vcr)      |
           |    |     |      |   |    |     |       |
           |    +--+--+      |   |    +--+--+       |
@@ -53,6 +53,30 @@ runs two processes via `entrypoint.sh`:
 - **vllm-vcr play**: mock engine-core backend (connects via ZMQ handshake,
   generates random tokens with configurable latency)
 
+## What It Proves
+
+This demo makes the complete metrics-driven routing path visible:
+
+- vllm-rs is the HTTP frontend for VCR and exposes vLLM-compatible Prometheus
+  metrics
+- llm-d EPP aggregates per-backend metrics into pool-level summaries
+- Grid operator scrapes EPP and scores backends with the production scoring
+  engine
+- Gateway-routed load visibly shifts request attribution from pool-a to pool-b
+  as pressure builds, not just rank changes
+- The live metrics table shows queue depth, KV-cache, scores, ranks, per-pool
+  request counts, and last-route attribution through the full lifecycle
+- Pool A recovers after load is removed: its queue drains, its rank returns to
+  zero, and traffic attribution returns to pool-a
+- A content-addressed overlay is published and hot-reloaded without pod
+  restart
+- The scorecard shows raw metrics, weighted scores, and ranks from the same
+  overlay revision
+- Optional metrics TLS lifecycle (9 stages): baseline mTLS, handshake
+  rejection, missing client identity, wrong CA, valid restore, stale-cache TTL
+  expiry and recovery, client cert rotation, server cert rotation with nginx
+  restart, and end-to-end routing verification after the full TLS cycle
+
 ## Metrics Transport
 
 llm-d EPP normally exposes Prometheus metrics over HTTP on port `9090`. In the
@@ -70,12 +94,43 @@ mTLS:     Grid operator -- HTTPS/mTLS -> nginx :9443
                                             +-- HTTP -> llm-d EPP :9090/metrics
 ```
 
+## Scoring and Routing Policy
+
+This demo explicitly selects Grid's queueDepth scoring strategy with
+routingPolicy: scoreFirst. The GridNetwork setting is:
+
+    scoringPolicy:
+      strategy: queueDepth
+
+Grid normalizes the EPP queue depth using queueCapacity: 4 and computes the
+dynamic provider score as:
+
+    score = 1 - normalized_queue_depth
+
+The provider with the lower queue therefore receives the better dynamic score.
+KV-cache utilization is collected and shown in the live table as an important
+pressure signal, but it is not combined into this demo's Grid score. Grid
+selects one provider-level metric strategy at a time so the routing decision
+remains explainable.
+
+Available strategies are:
+
+| Strategy | Behavior |
+|---|---|
+| noMetrics | Default when scoringPolicy is omitted; uses health, admission, locality, freshness, and other routing rules without dynamic metric scoring. |
+| queueDepth | Prefers the provider with the lowest normalized queue depth. |
+| kvCachePressure | Prefers the provider with the most available KV-cache capacity. |
+
+geographyFirst is the default routing policy and preserves locality ahead of
+score. This demo uses scoreFirst so a sufficiently better queue score can move
+traffic to the remote pool.
+
 ## Controlled Pressure
 
-The demo generates real HTTP load through the **consumer Grid gateway**,
-replacing the previous fake-metrics ramp approach. Traffic flows through the
-full routing chain: consumer gateway, intelligent routing overlay, provider
-gateway (mTLS), and finally to VCR backends. A pressure-generator Deployment
+The demo generates real HTTP load through the **consumer Grid gateway**.
+Traffic flows through the full routing chain: consumer gateway, intelligent
+routing overlay, provider gateway (mTLS), and finally to VCR backends. A
+pressure-generator Deployment
 in pool-a starts scaled to zero and is controlled by the xtask orchestration:
 
 1. **Baseline**: Both pools idle, pool-a preferred (rank 0). Probe requests
@@ -107,25 +162,6 @@ VCR pods are configured with small scheduler limits (`MOCK_MAX_NUM_SEQS=4`,
 `MOCK_ITL_MS=20`) so that modest gateway-routed load creates observable
 pressure.
 
-## What It Proves
-
-- vllm-rs frontend produces standard vLLM Prometheus metrics
-- llm-d EPP aggregates per-backend metrics into pool-level summaries
-- Grid operator scrapes EPP and scores backends with production scoring engine
-- Gateway-routed load visibly shifts request attribution from pool-a to pool-b
-  as pressure builds (not just rank changes -- actual routed traffic)
-- Live metrics table shows queue depth, KV-cache, scores, ranks, per-pool
-  request counts, and last-route attribution through the full lifecycle
-- A-to-B-to-A capacity failover as Pool A load is removed, confirmed by
-  measured queue drain and restored attribution
-- Content-addressed overlay published and hot-reloaded without pod restart
-- Scorecard shows raw metrics, weighted scores, and ranks from the same overlay
-  revision
-- Optional metrics TLS lifecycle (9 stages): baseline mTLS, handshake rejection,
-  missing client identity, wrong CA, valid restore, stale-cache TTL expiry
-  and recovery, client cert rotation, server cert rotation with nginx
-  restart, and end-to-end routing verification after the full TLS cycle
-
 ## Prerequisites
 
 - A local [praxis-proxy/grid](https://github.com/praxis-proxy/grid) checkout (or set `GRID_REPO`)
@@ -134,16 +170,16 @@ pressure.
 - Rust stable 1.96+
 - Network access for Hugging Face tokenizer download (first run)
 - Approximately 8 GB RAM for two Kind clusters (vllm-vcr pods require more
-  memory than the previous inference-sim)
+  memory than the earlier backend)
 
 ## Registry Images
 
 ```bash
-export GRID_XTASK_GATEWAY_IMAGE=ghcr.io/praxis-proxy/grid-ai-rollup:v0.1.1
-export GRID_XTASK_OPERATOR_IMAGE=ghcr.io/praxis-proxy/grid-operator:v0.1.2
+export GRID_XTASK_GATEWAY_IMAGE=ghcr.io/praxis-proxy/grid-ai-rollup:v0.1.3
+export GRID_XTASK_OPERATOR_IMAGE=ghcr.io/praxis-proxy/grid-operator:v0.1.3
 export GRID_XTASK_EPP_IMAGE=ghcr.io/llm-d/llm-d-inference-scheduler:v0.8.0
 export GRID_XTASK_VCR_IMAGE=ghcr.io/neuralmagic/vllm-vcr:vllm0.23
-export GRID_XTASK_OVERLAY_SYNC_IMAGE=ghcr.io/praxis-proxy/grid-overlay-sync:v0.1.2
+export GRID_XTASK_OVERLAY_SYNC_IMAGE=ghcr.io/praxis-proxy/grid-overlay-sync:v0.1.3
 export GRID_XTASK_IMAGE_PULL_POLICY=IfNotPresent
 ```
 
@@ -249,15 +285,15 @@ generator requests or with `MOCK_TIME_FACTOR_UNDER_LOAD > 1.0`.
 
 - No real GPU inference; vllm-vcr generates random tokens, so response content
   is meaningless.
-- No P99 latency or prefix-cache derivation; both signals default to 0.5
-  (neutral).
+- No P99 latency or prefix-cache derivation; those signals are not used by the
+  selected queueDepth strategy.
 - Two-pool topology; each cluster's own provider scores with full locality
   (1.0) while the remote peer scores at 0.5.
 - No cost signal; defaults to 0.5.
 - No hysteresis or minimum switch margin; a score difference triggers a rank
   change.
-- Missing telemetry scores neutrally, which can cause an unobservable provider
-  to outrank one with known high pressure.
+- Missing queue telemetry scores neutrally, which can cause an unobservable
+  provider to outrank one with known high pressure.
 
 ## Implementation Documentation
 

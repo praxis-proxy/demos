@@ -65,10 +65,10 @@ spec:
               mountPath: /etc/praxis/tls
               readOnly: true
             - name: provider-credential
-              mountPath: /etc/praxis/credentials/mock-inference
+              mountPath: /etc/praxis/credentials/vcr-inference
               readOnly: true
             - name: provider-secondary-credential
-              mountPath: /etc/praxis/credentials/mock-inference-secondary
+              mountPath: /etc/praxis/credentials/vcr-inference-secondary
               readOnly: true
       volumes:
         - name: config
@@ -79,8 +79,8 @@ spec:
             secretName: provider-gateway-tls
         - name: provider-credential
           secret:
-            secretName: mock-inference-credential
+            secretName: vcr-inference-credential
         - name: provider-secondary-credential
           secret:
-            secretName: mock-inference-secondary-credential
+            secretName: vcr-inference-secondary-credential
             optional: true

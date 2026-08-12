@@ -15,28 +15,28 @@ spec:
 
   clusters:
     - name: east-provider
-      stacks: [metallb, grid-operator, east-provider-operator, east-provider-site, inference-sim]
+      stacks: [metallb, grid-operator, east-provider-operator, east-provider-site, vcr-backend]
       properties:
         region: east
         role: provider
         gatewayImage: "praxis-ai:glb-demo"
         operatorImage: "grid-operator:glb-demo"
-        mockProviderImage: "grid-mock-providers:glb-demo"
-        imagePullPolicy: Never
+        vcrImage: "ghcr.io/neuralmagic/vllm-vcr:vllm0.23"
+        imagePullPolicy: IfNotPresent
         gatewayImageRepo: "praxis-ai"
         gatewayImageTag: "glb-demo"
         operatorImageRepo: "grid-operator"
         operatorImageTag: "glb-demo"
 
     - name: west-provider
-      stacks: [metallb, grid-operator, west-provider-operator, west-provider-site, inference-sim]
+      stacks: [metallb, grid-operator, west-provider-operator, west-provider-site, vcr-backend]
       properties:
         region: west
         role: provider
         gatewayImage: "praxis-ai:glb-demo"
         operatorImage: "grid-operator:glb-demo"
-        mockProviderImage: "grid-mock-providers:glb-demo"
-        imagePullPolicy: Never
+        vcrImage: "ghcr.io/neuralmagic/vllm-vcr:vllm0.23"
+        imagePullPolicy: IfNotPresent
         gatewayImageRepo: "praxis-ai"
         gatewayImageTag: "glb-demo"
         operatorImageRepo: "grid-operator"
@@ -49,8 +49,8 @@ spec:
         role: edge
         gatewayImage: "praxis-ai:glb-demo"
         operatorImage: "grid-operator:glb-demo"
-        mockProviderImage: "grid-mock-providers:glb-demo"
-        imagePullPolicy: Never
+        vcrImage: "ghcr.io/neuralmagic/vllm-vcr:vllm0.23"
+        imagePullPolicy: IfNotPresent
         gatewayImageRepo: "praxis-ai"
         gatewayImageTag: "glb-demo"
         operatorImageRepo: "grid-operator"
@@ -63,8 +63,8 @@ spec:
         role: edge
         gatewayImage: "praxis-ai:glb-demo"
         operatorImage: "grid-operator:glb-demo"
-        mockProviderImage: "grid-mock-providers:glb-demo"
-        imagePullPolicy: Never
+        vcrImage: "ghcr.io/neuralmagic/vllm-vcr:vllm0.23"
+        imagePullPolicy: IfNotPresent
         gatewayImageRepo: "praxis-ai"
         gatewayImageTag: "glb-demo"
         operatorImageRepo: "grid-operator"
@@ -77,8 +77,8 @@ spec:
         role: gtm-emulator
         gatewayImage: "praxis-ai:glb-demo"
         operatorImage: "grid-operator:glb-demo"
-        mockProviderImage: "grid-mock-providers:glb-demo"
-        imagePullPolicy: Never
+        vcrImage: "ghcr.io/neuralmagic/vllm-vcr:vllm0.23"
+        imagePullPolicy: IfNotPresent
         gatewayImageRepo: "praxis-ai"
         gatewayImageTag: "glb-demo"
         operatorImageRepo: "grid-operator"
@@ -255,7 +255,7 @@ spec:
         - type: template-manifest
           path: resources/provider-workload-east-secondary.yaml
         - type: wait
-          resource: deployment/mock-inference-secondary
+          resource: deployment/vcr-inference-secondary
           namespace: grid-system
           condition: available
           timeout: "120s"
@@ -302,8 +302,8 @@ spec:
         - type: template-manifest
           path: resources/gridnetwork-west-edge.yaml
 
-    inference-sim:
-      description: Private inference backend behind an mTLS Praxis provider gateway
+    vcr-backend:
+      description: vllm-vcr inference backend behind an mTLS Praxis provider gateway
       steps:
         - type: template-manifest
           path: resources/provider-workloads.yaml
@@ -361,10 +361,10 @@ spec:
               enabled: true
               existingSecret: "provider-gateway-tls"
             credentials:
-              - name: "mock-inference-credential"
-                mountPath: "/etc/praxis/credentials/mock-inference"
-              - name: "mock-inference-secondary-credential"
-                mountPath: "/etc/praxis/credentials/mock-inference-secondary"
+              - name: "vcr-inference-credential"
+                mountPath: "/etc/praxis/credentials/vcr-inference"
+              - name: "vcr-inference-secondary-credential"
+                mountPath: "/etc/praxis/credentials/vcr-inference-secondary"
                 optional: true
             podLabels:
               grid.praxis-proxy.io/backend-access: "provider-gateway"
@@ -372,7 +372,7 @@ spec:
         - type: manifest
           path: resources/backend-network-policy.yaml
         - type: wait
-          resource: deployment/mock-inference
+          resource: deployment/vcr-inference
           namespace: grid-system
           condition: available
           timeout: "120s"

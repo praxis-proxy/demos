@@ -18,9 +18,9 @@ filter_chains:
         overlay_file: /etc/praxis/routing/routing-overlay.json
         model_header: X-Model
         provider_hop_clusters:
-          - sim-west-provider
-          - sim-central-provider
-          - sim-east-provider
+          - vcr-west-provider
+          - vcr-central-provider
+          - vcr-east-provider
         expected_overlay_scope:
           network: grid-combined-site
           gateway: consumer-gateway
@@ -35,7 +35,7 @@ filter_chains:
           ttl_secs: 3600
       - filter: load_balancer
         clusters:
-          - name: sim-west-provider
+          - name: vcr-west-provider
             tls:
               ca:
                 ca_path: /etc/praxis/tls/ca.crt
@@ -46,7 +46,7 @@ filter_chains:
               verify: true
             endpoints:
               - "{{ captures.west.provider-gateway-ip }}:8443"
-          - name: sim-central-provider
+          - name: vcr-central-provider
             tls:
               ca:
                 ca_path: /etc/praxis/tls/ca.crt
@@ -57,7 +57,7 @@ filter_chains:
               verify: true
             endpoints:
               - "{{ captures.central.provider-gateway-ip }}:8443"
-          - name: sim-east-provider
+          - name: vcr-east-provider
             tls:
               ca:
                 ca_path: /etc/praxis/tls/ca.crt
