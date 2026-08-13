@@ -29,7 +29,7 @@ Usage:
   python demo/record_chat_demo.py approve [--approver alice]
 
 Prerequisites:
-  - The full cpex stack up (../restart.sh with the feat/hil_apl gateway, plus a
+  - The full demo stack up (../restart.sh, plus a
     REBUILD_IMAGES=1 run if hr-mcp predates adjust_compensation), so
     :8090 gateway, :8081 Keycloak (cpex-demo realm), :5001 auth-channel, and the
     hr-mcp backend are all live.

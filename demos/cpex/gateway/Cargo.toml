@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Praxis Contributors
 #
 # Thin gateway binary for the CPEX HR demo. Composes praxis-ai's AI filters
-# (mcp classifier, …) with the CPEX/HIL `policy` filter by:
+# (mcp classifier, …) with praxis's `policy` filter by:
 #   * depending on praxis-ai's server (which auto-registers the AI filters), and
 #   * enabling `policy-engine`, which auto-registers the `policy` filter via
 #     praxis-proxy-filter's own builtins registry.

@@ -4,7 +4,7 @@
 //! Thin CPEX + praxis-ai gateway.
 //!
 //! Delegates to praxis-ai's `run_server`. Because this crate enables
-//! `cpex-policy-engine` (see Cargo.toml), praxis-proxy-filter's builtins
+//! `policy-engine` (see Cargo.toml), praxis-proxy-filter's builtins
 //! registry adds the `policy` filter, and praxis-ai's server adds the AI
 //! filters (mcp, …) — so a single binary composes both with no manual
 //! filter registration.

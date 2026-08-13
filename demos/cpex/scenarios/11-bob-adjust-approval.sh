@@ -23,7 +23,7 @@
 #
 # Needs the FULL stack (more than scenarios 01-10): restart.sh brings up
 # Keycloak with CIBA + the channel SPI, the auth-channel approval UI on
-# :5001, valkey, and the gateway built from the feat/hil_apl praxis fork.
+# :5001, valkey, and the gateway.
 # All three PDP configs behave identically (no PDP step here).
 
 set -euo pipefail
@@ -51,7 +51,7 @@ BODY=$(_http_body "$RAW")
 CODE=$(printf '%s' "$BODY" | jq -r '.error.code // empty' 2>/dev/null || true)
 if [ "$CODE" != "-32120" ]; then
   note "Did not get the expected -32120 pending response (got: ${CODE:-none})."
-  note "Is the gateway on the feat/hil_apl fork with the auth-channel (:5001) up?"
+  note "Is the gateway running with the auth-channel (:5001) up?"
   note "See 'Human-in-the-loop: manager approval' in the README."
   exit 1
 fi

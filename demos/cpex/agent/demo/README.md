@@ -16,7 +16,7 @@ allow/deny, on-the-wire SSN redaction, and the CIBA manager-approval flow.
 ## Prerequisites
 
 1. **The full stack up.** From `demos/cpex`, run `./restart.sh` with the
-   `feat/hil_apl` gateway (see the [demo README](../../README.md)). If `hr-mcp`
+   gateway (see the [demo README](../../README.md)). If `hr-mcp`
    was built before `adjust_compensation` existed, rebuild it once:
    `docker compose build hr-mcp && docker compose up -d hr-mcp`. The preflight
    check flags this.
