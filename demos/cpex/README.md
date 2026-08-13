@@ -423,6 +423,21 @@ deny / redact paths.
 
 ## Notes
 
+**`pii-scan` and `audit-log` are host plugins, not builtins.** The engine bundles
+identity, delegation and elicitation plugins plus the three decision points. These
+two are not bundled: the scanner is regex matching with no Luhn check, and the
+logger writes to stderr, so neither is something a policy engine should ship as
+supported. They live in the engine's repository as unpublished reference
+implementations, and `gateway/src/main.rs` hands them to the policy filter with
+`register_policy_plugin_factory` before the server starts.
+
+That makes this demo the worked example of extending the engine. To use your own
+PII detector or point audit at a SIEM, replace one line in
+`register_host_plugins()` — `cpex.yaml` does not change, because the policy names
+a `kind:` and the host decides what implements it. A `kind:` with no registration
+fails at startup naming the kind, rather than loading a gateway whose PII gate
+silently never runs.
+
 **Step ordering (scenario 07).** Policy steps run in order, and a deny
 short-circuits the rest of the chain. The `send_email` route lists
 `run(audit-log)` before `run(pii-scan)` so the attempt is recorded before the PII

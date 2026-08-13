@@ -31,6 +31,21 @@ praxis-ai-proxy = { git = "https://github.com/praxis-proxy/ai", rev = "3ef40ace4
 # rather than pinned to a git tag: the `[patch]` below is global, so it also
 # redirects the AI server's own reference and the graph resolves one shared copy.
 praxis-proxy-filter = { version = "0.5", features = ["policy-engine"] }
+
+# The two reference plugins the demo registers itself: a PII scanner and an audit
+# logger. They were bundled builtins until neither earned a supported slot, and
+# they are now unpublished, so the demo depends on them by git and registers each
+# factory in main.rs. This is also the demo's worked example of extending the
+# engine with a plugin the gateway was not shipped with.
+#
+# The rev MUST match the `ppe` pin in the praxis checkout that `.praxis` points
+# at. A different rev resolves a second copy of praxis-policy-core, these
+# factories then implement `PluginFactory` from that other copy, and the
+# registration fails to typecheck. It is the same two-copy trap the second
+# `[patch]` section below exists for.
+praxis-policy-plugin-pii-scanner = { git = "https://github.com/praxis-proxy/policy", rev = "e113aea313c1bab800ee87fb5055d2eebfa706fb" }
+praxis-policy-plugin-audit-logger = { git = "https://github.com/praxis-proxy/policy", rev = "e113aea313c1bab800ee87fb5055d2eebfa706fb" }
+
 clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 
