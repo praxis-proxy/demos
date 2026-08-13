@@ -6,9 +6,9 @@ agent and its tools as an identity-aware control point. One policy layer decides
 who can call what, what data comes back, and where that data is allowed to go
 next.
 
-It is an end-to-end setup of **Praxis** with the feature-gated **`cpex`** filter,
-**Keycloak** as the OIDC IdP, and a mock **MCP server**, exercising the full
-CPEX/APL (Authorization Policy Logic) stack:
+It is an end-to-end setup of **Praxis** with its feature-gated **`policy`**
+filter, **Keycloak** as the OIDC IdP, and a mock **MCP server**, exercising the
+full APL (Authorization Policy Logic) stack:
 
 - multi-source identity (user, agent, and workload JWTs in separate headers,
   each validated by its own identity plugin)
@@ -138,8 +138,8 @@ Human-in-the-loop approval adds a second, **out-of-band** path for
 starts the gateway, and smoke-tests scenario 01. The whole demo is one command:
 
 ```bash
-# From this directory. First run builds the gateway (~5 min cold, ~30s warm).
-# Point it at a praxis checkout: PRAXIS_DIR=<path> or PRAXIS_GIT_URL=<url>.
+# From this directory. First run clones praxis and builds the gateway
+# (~5 min cold, ~30s warm).
 ./restart.sh
 ./walkthrough.sh
 ```
@@ -157,34 +157,36 @@ docker compose up -d                  # Keycloak + mock MCP server + valkey
 ## Configuring the gateway / praxis source
 
 The gateway is a thin crate (`gateway/`) that composes **praxis-ai**'s AI filters
-(the `mcp` protocol classifier) with the **CPEX/HIL `policy`** filter: it depends
-on praxis-ai's server, enables the `cpex-policy-engine` feature (which registers
-`policy`), and `[patch]`es `praxis-proxy-*` to our HIL fork. `build-gateway.sh`
-builds it, resolving the fork into the gitignored `gateway/.praxis` (first match
-wins):
+(the `mcp` protocol classifier) with praxis's **`policy`** filter: it depends on
+praxis-ai's server and enables the `policy-engine` feature, which registers
+`policy`. Both filters register themselves, so there is no manual wiring.
 
-| Env var | Effect |
+`gateway/Cargo.toml` also `[patch]`es `praxis-proxy-*` to a praxis checkout in the
+gitignored `gateway/.praxis`. That is not a fork: no *published* praxis version
+carries the `policy-engine` feature yet, so the demo builds praxis from source.
+`build-gateway.sh` resolves that checkout, first match wins:
+
+| Source | Effect |
 |---|---|
-| `PRAXIS_DIR` | Path to a local praxis checkout, symlinked as `gateway/.praxis`. |
-| `PRAXIS_GIT_URL` (+ `PRAXIS_GIT_REF`, default `feat/hil_apl`) | Cloned into `gateway/.praxis`. |
-| existing `gateway/.praxis` | Reused as-is. |
-
-> The HIL (elicitation / CIBA approval) demo needs the `feat/hil_apl` branch. It
-> carries the `policy`-filter changes base `main` doesn't. Point `PRAXIS_DIR` at
-> a checkout on that branch, or set `PRAXIS_GIT_URL`.
+| `PRAXIS_DIR=<path>` | Symlinks a local praxis checkout as `gateway/.praxis`. |
+| an existing `gateway/.praxis` | Reused as-is, never fetched into. |
+| default | Clones `PRAXIS_GIT_URL` (upstream praxis) at `PRAXIS_GIT_REF` (`main`). |
 
 ```bash
-# From a local praxis checkout:
+# Nothing to set — clones upstream praxis on main:
+./restart.sh
+
+# Against a local checkout:
 PRAXIS_DIR=~/src/praxis ./restart.sh
 
-# Or clone a ref from git:
-PRAXIS_GIT_URL=https://github.com/terylt/praxis.git PRAXIS_GIT_REF=feat/hil_apl ./restart.sh
+# Against a specific ref:
+PRAXIS_GIT_REF=v0.6.0 ./restart.sh
 
 # GATEWAY_PROFILE=debug for a faster build; GATEWAY_BIN=<path> to skip building.
 ```
 
-> Once the HIL changes land upstream, drop the `[patch]` in `gateway/Cargo.toml`
-> and the gateway builds against published praxis directly.
+> Once a praxis release carries `policy-engine`, drop the `[patch]` in
+> `gateway/Cargo.toml` and the gateway builds against published praxis directly.
 
 ## Scenarios
 
@@ -418,8 +420,8 @@ deny / redact paths.
   and check `docker compose logs -f auth-channel`; the gateway log is `./gateway.log`.
 - **Token expired during a long pause.** CIBA requests expire after ~120s by realm
   policy; in the chat, type `relogin` to mint fresh tokens.
-- **Fork requirement.** The `policy`-filter elicitation changes live on the
-  `feat/hil_apl` branch. See [Configuring the gateway / praxis source](#configuring-the-gateway--praxis-source).
+- **Gateway will not build.** It compiles praxis from source into
+  `gateway/.praxis`; see [Configuring the gateway / praxis source](#configuring-the-gateway--praxis-source).
 
 ## Notes
 
@@ -468,16 +470,16 @@ the padding, so the wire stays correct. This is documented in the filter source.
 | `walkthrough.sh` | Narrated tour of the core scenarios |
 | `restart.sh` | Tear down, bring up, and smoke-test the demo |
 | `build-gateway.sh` | Build the gateway from `gateway/` (see "Configuring the gateway / praxis source") |
-| `gateway/` | Thin binary composing praxis-ai's AI filters + the CPEX/HIL `policy` filter |
+| `gateway/` | Thin binary composing praxis-ai's AI filters + praxis's `policy` filter |
 | `agent/` | Optional Python chat agent for an LLM-driven demo (incl. the manager-approval walkthrough) |
 
 ## Where the filter lives
 
 The filter source is in the praxis repository at
 [`filter/src/builtins/http/security/policy/`](https://github.com/praxis-proxy/praxis/tree/main/filter/src/builtins/http/security/policy),
-behind the `cpex-policy-engine` Cargo feature on `praxis-proxy-filter` (registered
-under the YAML filter name `policy`). That feature registers both the Cedar
-(`apl-pdp-cedar-direct`) and CEL (`apl-pdp-cel`) PDP backends, so one binary
-serves both `cpex.yaml`, `cpex-cel.yaml`, and `cpex-opa.yaml`. See the filter's own module docs
-there for configuration and internals.
+behind the `policy-engine` Cargo feature on `praxis-proxy-filter` (registered
+under the YAML filter name `policy`). That feature brings in all three decision
+points — Cedar, CEL and OPA — so one binary serves `cpex.yaml`, `cpex-cel.yaml`
+and `cpex-opa.yaml`. See the filter's own module docs there for configuration and
+internals.
 
