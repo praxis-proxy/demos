@@ -1,16 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Praxis Contributors
-#
-# Thin gateway binary for the CPEX HR demo. Composes praxis-ai's AI filters
-# (mcp classifier, …) with praxis's `policy` filter by:
-#   * depending on praxis-ai's server (which auto-registers the AI filters), and
-#   * enabling `policy-engine`, which auto-registers the `policy` filter via
-#     praxis-proxy-filter's own builtins registry.
-# No manual filter registration.
-#
-# The `[patch.crates-io]` points praxis-proxy-* at a local praxis checkout: no
-# published version carries the `policy-engine` feature yet. Once the engine port
-# ships, drop the patch and this builds against published praxis directly.
+
 [package]
 name = "cpex-praxis-gateway"
 version = "0.1.0"
@@ -22,29 +12,14 @@ name = "cpex-praxis-gateway"
 path = "src/main.rs"
 
 [dependencies]
-# praxis-ai's server (unmodified upstream) — registers the AI filters and
-# exposes `run_server`.
-# `praxis-main` builds the AI filters against praxis from git, which is what the
-# `[patch]` below points them at.
 praxis-ai-proxy = { git = "https://github.com/praxis-proxy/ai", rev = "3ef40ace44dbb0e98dde84c83b504a490a1c30c5", features = ["praxis-main"] }
-# Declared only to turn on the policy engine feature graph-wide. Named by version
-# rather than pinned to a git tag: the `[patch]` below is global, so it also
-# redirects the AI server's own reference and the graph resolves one shared copy.
+# Declared only to turn on `policy-engine` graph-wide.
 praxis-proxy-filter = { version = "0.5", features = ["policy-engine"] }
 
-# The two reference plugins the demo registers itself: a PII scanner and an audit
-# logger. They were bundled builtins until neither earned a supported slot, and
-# they are now unpublished, so the demo depends on them by git and registers each
-# factory in main.rs. This is also the demo's worked example of extending the
-# engine with a plugin the gateway was not shipped with.
-#
-# The rev MUST match the `ppe` pin in the praxis checkout that `.praxis` points
-# at. A different rev resolves a second copy of praxis-policy-core, these
-# factories then implement `PluginFactory` from that other copy, and the
-# registration fails to typecheck. It is the same two-copy trap the second
-# `[patch]` section below exists for.
-praxis-policy-plugin-pii-scanner = { git = "https://github.com/praxis-proxy/policy", rev = "d68dec3ae964dfa0e3b06f82a217e30776a1eb2d" }
-praxis-policy-plugin-audit-logger = { git = "https://github.com/praxis-proxy/policy", rev = "d68dec3ae964dfa0e3b06f82a217e30776a1eb2d" }
+# Unpublished reference plugins the demo registers itself, in main.rs. This is
+# the worked example of extending the engine with a plugin it does not bundle.
+praxis-policy-plugin-pii-scanner = { git = "https://github.com/praxis-proxy/policy", tag = "v0.1.0" }
+praxis-policy-plugin-audit-logger = { git = "https://github.com/praxis-proxy/policy", tag = "v0.1.0" }
 
 clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
@@ -52,21 +27,21 @@ tracing = "0.1"
 [target.'cfg(unix)'.dependencies]
 tikv-jemallocator = "0.7"
 
-# Source override: build praxis-proxy from a local checkout instead of crates.io.
-# The patch points at `.praxis/` (relative, portable) — a symlink/checkout that
-# `build-gateway.sh` populates from PRAXIS_DIR or PRAXIS_GIT_URL (`.praxis` is
-# gitignored). Once the engine port ships, delete this whole section and it
-# builds against published praxis directly.
+# No published praxis carries `policy-engine`, so build it from the local
+# checkout `build-gateway.sh` populates at `.praxis/` (gitignored).
 [patch.crates-io]
 praxis-proxy-core = { path = ".praxis/core" }
 praxis-proxy-filter = { path = ".praxis/filter" }
 praxis-proxy-protocol = { path = ".praxis/protocol" }
 praxis-proxy-tls = { path = ".praxis/tls" }
+# The plugins above resolve `praxis-policy-core` from the git checkout, while
+# praxis resolves it from crates.io. Two copies means two `PluginFactory`
+# traits and registration stops typechecking, so pin both to the git one.
+praxis-policy-core = { git = "https://github.com/praxis-proxy/policy", tag = "v0.1.0" }
 
 # praxis-ai pins praxis-proxy-* by git tag, which `[patch.crates-io]` cannot
-# redirect. Without this second patch the graph carries two copies of the filter
-# and the AI server registers from the tagged one, which has no `policy-engine` —
-# so the `policy` filter silently never loads.
+# redirect. Without this the AI server registers from the tagged filter, which
+# has no `policy-engine`, and the `policy` filter silently never loads.
 [patch."https://github.com/praxis-proxy/praxis.git"]
 praxis-proxy-core = { path = ".praxis/core" }
 praxis-proxy-filter = { path = ".praxis/filter" }
