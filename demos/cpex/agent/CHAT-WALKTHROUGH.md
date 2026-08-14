@@ -263,7 +263,7 @@ record, no plugin coordination required.
   what hr-mcp logged. Show `aud: workday-api`, signed by Keycloak.
 - Run `./verify-token-exchange.sh` live — proves RFC 8693 against
   the actual Keycloak running in docker.
-- Edit the cpex.yaml `require(...)` line and `pkill -HUP` the gateway —
+- Edit the policy.yaml `require(...)` line and `pkill -HUP` the gateway —
   the new policy takes effect immediately (the manager reloads).
 - Open `realm-export.json` and show the Keycloak v2 STE setup. Compare
   to MCP's `aud` validation requirement in the authorization spec.
@@ -284,6 +284,6 @@ record, no plugin coordination required.
 ## Recording this as a demo
 
 To capture this walkthrough as a GIF/MP4 automatically — a real chat session
-with the governing `cpex.yaml` policy spotlighted alongside each step — see
+with the governing `policy.yaml` policy spotlighted alongside each step — see
 [`demo/README.md`](demo/README.md) and `demo/record_chat_demo.py`. It needs a
 capable tool-calling model (`DEMO_MODEL`) plus `tmux`/`asciinema` on PATH.

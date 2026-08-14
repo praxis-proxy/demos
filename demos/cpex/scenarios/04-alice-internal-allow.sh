@@ -5,8 +5,8 @@
 #   Layer 1 — APL gate `require(group.engineering OR group.security)`
 #             → passes (Alice is engineering)
 #   Layer 2 — PDP `engineering-internal-repos` rule (Cedar in
-#             cpex.yaml; the equivalent CEL expr in cpex-cel.yaml; the
-#             equivalent Rego rule in cpex-opa.yaml)
+#             policy.yaml; the equivalent CEL expr in policy-cel.yaml; the
+#             equivalent Rego rule in policy-opa.yaml)
 #             → permits (engineer + visibility=internal)
 #   Layer 3 — Token exchange to github-api
 #             → Keycloak mints token with permissions=[repo:read:internal]

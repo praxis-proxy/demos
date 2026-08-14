@@ -6,7 +6,7 @@ Record the interactive CPEX HR assistant (chat.py) as a demo GIF/MP4.
 
 This is the "assistant cut": a real, LLM-driven session in front of the
 Praxis-CPEX gateway, driven through a two-pane tmux layout and captured with
-asciinema. The TOP pane spotlights the exact cpex.yaml policy that governs each
+asciinema. The TOP pane spotlights the exact policy.yaml policy that governs each
 step; the BOTTOM pane is chat.py talking to the gateway. The two are interleaved
 so a viewer sees the rule and then the agent obeying it.
 
@@ -99,7 +99,7 @@ def _c(text: str, color: str) -> str:
 # The acts: persona, prompt, the policy to spotlight, and expected markers
 # --------------------------------------------------------------------------
 #
-# Each act names a policy snippet (verbatim from cpex.yaml) plus a one-line
+# Each act names a policy snippet (verbatim from policy.yaml) plus a one-line
 # caption explaining the decision, and the natural-language prompt typed into
 # the chat. `switch` swaps the human persona mid-conversation.
 

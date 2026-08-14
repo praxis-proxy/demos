@@ -1,6 +1,10 @@
+# shellcheck shell=bash
 # Shared helpers for the scenario scripts. Source from each script:
 #
 #   source "$(dirname "$0")/_lib.sh"
+#
+# Sourced, never executed, so it carries a shell directive rather than a
+# shebang.
 
 GATEWAY="${GATEWAY:-http://localhost:8090}"
 DEMO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -32,10 +36,10 @@ _print_response() {
 
 _post_tool() {
   local user_token="$1" client_token="$2" body="$3"
-  # Thread a CPEX session id when SESSION_ID is set: it lands in the
-  # X-Session-Id header, which the praxis cpex filter maps to
+  # Thread a session id when SESSION_ID is set: it lands in the
+  # X-Session-Id header, which the policy filter maps to
   # agent.session_id so session-scoped taint labels persist across
-  # separate tool calls in the same logical session. The cpex session
+  # separate tool calls in the same logical session. The engine's session
   # store binds it to the resolved subject (H(subject : session_id)),
   # so the same id under a different user is a different bucket. Unset
   # → no header → unchanged behavior.

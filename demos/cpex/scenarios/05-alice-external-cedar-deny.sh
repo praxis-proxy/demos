@@ -13,8 +13,8 @@
 # Result: HTTP 200 + JSON-RPC error code -32001 — per MCP's Tools
 # spec, gateway denials are reported as JSON-RPC errors inside HTTP
 # 200, not as HTTP 4xx. The data.violation depends on the PDP backend:
-# "cedar.default_deny" under cpex.yaml (Cedar); "cel.policy_denied"
-# under cpex-cel.yaml (CEL); "opa.policy_denied" under cpex-opa.yaml
+# "cedar.default_deny" under policy.yaml (Cedar); "cel.policy_denied"
+# under policy-cel.yaml (CEL); "opa.policy_denied" under policy-opa.yaml
 # (Rego).
 
 set -euo pipefail

@@ -1,18 +1,10 @@
-# Praxis listener for the HR demo. The chain order is the load-
-# bearing thing:
+# Praxis listener for the HR demo. Chain order is load-bearing:
 #
-#   1. mcp   — Praxis's built-in JSON-RPC envelope parser. Sets
-#              `mcp.method` / `mcp.name` in ctx.filter_metadata,
-#              which our cpex filter reads to dispatch CMF.
-#
-#   2. cpex  — identity (X-User-Token + Authorization), APL policy
-#              (require(role.hr) + delegate(workday-oauth, …)),
-#              and args rewriting (redact(args.ssn) when no
-#              perm.view_ssn). `body_access: read_write` enables
-#              the JSON-RPC re-serialization round-trip.
-#
-#   3. router — forwards everything reaching here to the mock HR
-#              MCP server running on the host at port 9100.
+#   1. mcp    — parses the JSON-RPC envelope into `mcp.method` / `mcp.name`,
+#               which the policy filter reads to dispatch CMF.
+#   2. policy — identity, APL policy, and args rewriting. `body_access:
+#               read_write` enables the JSON-RPC re-serialization round-trip.
+#   3. router — forwards to the mock HR MCP server on port 9100.
 
 listeners:
   - name: gateway
@@ -25,11 +17,9 @@ filter_chains:
   - name: main
     filters:
       - filter: mcp
-        # Defaults are fine. Reads body, writes mcp.method / mcp.name
-        # into ctx.filter_metadata.
 
       - filter: policy
-        config_path: ./cpex.yaml
+        config_path: ./policy.yaml
         body_access: read_write
 
       - filter: router

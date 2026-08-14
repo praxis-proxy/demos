@@ -17,7 +17,7 @@
 #      violation = session_tainted_secret   (clean body, tainted session)
 #
 # The session id is threaded via the X-Session-Id header (see _lib.sh);
-# the praxis cpex filter maps it to agent.session_id and the cpex
+# the policy filter maps it to agent.session_id and the engine's
 # session store binds it to the resolved subject.
 
 set -euo pipefail

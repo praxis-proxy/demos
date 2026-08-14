@@ -5,7 +5,7 @@ demo GIF/MP4. It is the "assistant cut": a real, LLM-driven session in front of
 the Praxis-CPEX gateway, captured with asciinema through a two-pane tmux layout.
 
 - **Bottom pane:** `chat.py` talking to the gateway.
-- **Top pane:** the exact `cpex.yaml` policy that governs each step, spotlighted
+- **Top pane:** the exact `policy.yaml` policy that governs each step, spotlighted
   just before the agent acts on it, plus the manager's out-of-band approval
   during the human-in-the-loop beat.
 

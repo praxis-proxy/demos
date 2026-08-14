@@ -1,10 +1,11 @@
-# CPEX runtime config for the HR demo — CEL variant.
+# Policy engine config for the HR demo, OPA variant.
 #
-# Identical to cpex.yaml EXCEPT the PDP backend for the search_repos
-# route: this config uses CEL (Common Expression Language) instead of
-# Cedar. Both express the same decision ("engineers read internal repos;
-# security reads any") — see cpex.yaml for the Cedar form. Run this
-# variant with:  GATEWAY_CONFIG=praxis-cel.yaml ./restart.sh
+# Identical to policy.yaml EXCEPT the PDP backend for the search_repos
+# route: this config uses OPA/Rego instead of Cedar. All three variants
+# express the same decision ("engineers read internal repos; security
+# reads any") so they are directly comparable: see policy.yaml for Cedar
+# and policy-cel.yaml for CEL. Run this variant with:
+#   GATEWAY_CONFIG=praxis-opa.yaml ./restart.sh
 #
 # Hot path:
 #   1. jwt-user      validates X-User-Token against Keycloak (cpex-demo realm)
@@ -202,26 +203,54 @@ global:
     - jwt-client
 
   # ----------------------------------------------------------------
-  # CEL PDP — inline boolean predicates as the decision backend.
-  # APL routes call into CEL via `cel:` steps; the expression
-  # evaluates against the common attribute vocabulary (subject.*,
-  # role.*, args.*, delegation.*, session.*) and returns a boolean:
-  # true → allow, false (or any eval error) → fail-closed deny.
+  # OPA PDP: Rego modules evaluated in-process by regorus. No sidecar
+  # and no network hop, so the decision stays on the request path.
   #
-  # CEL vs Cedar (see cpex.yaml for the Cedar form): reach for CEL
-  # when the decision is a self-contained boolean predicate authored
-  # inline in the route — no external policy store, zero glue. Reach
-  # for Cedar when policy lives outside the route (versioned/signed
-  # policy sets) or needs the full entity/relationship model. Here
-  # both express the SAME decision so the two are directly comparable.
+  # The module is declared here, once, and compiled at config load. A
+  # Rego syntax error therefore fails the load rather than surfacing as
+  # a runtime deny on the first request. Routes then query it with an
+  # `opa:` step naming a rule path.
+  #
+  # The flat attribute bag becomes the Rego `input` document, so
+  # `role.engineer` reads as `input.role.engineer` and `args.visibility`
+  # as `input.args.visibility`. The vocabulary is the same one the CEL
+  # and Cedar variants see.
+  #
+  # Choosing between the three: reach for CEL when the decision is a
+  # self-contained boolean you want to read inline in the route. Reach
+  # for Cedar when policy lives outside the route or needs its entity
+  # and relationship model. Reach for OPA when you already have Rego,
+  # or want rules that compose and can be unit-tested with the OPA
+  # tooling your org already runs. All three express the SAME decision
+  # here on purpose.
   #
   # NOTE: this config omits the `apl:` wrapper — APL terms (`pdp:` here,
   # `policy:`/`args:`/`result:` on the routes below) sit directly on the
-  # section. cpex accepts both forms; see cpex.yaml for the wrapped style.
+  # section. Both forms are accepted; see policy.yaml for the wrapped style.
   # ----------------------------------------------------------------
   pdp:
-    - kind: cel
+    - kind: opa
       on_error: deny   # fail-closed; the default, spelled out
+      modules:
+        - |
+          package authz
+
+          # Absent an allow rule that fires, the answer is deny. Rego's
+          # `default` is what makes this fail-closed rather than undefined.
+          default allow := false
+
+          # Engineers may read internal repos. A missing key makes the
+          # body undefined rather than an error, so a request with no
+          # engineer role simply does not match.
+          allow if {
+            input.role.engineer == true
+            input.args.visibility == "internal"
+          }
+
+          # Security may read any repo, whatever its visibility.
+          allow if {
+            input.role.security == true
+          }
 
   # ----------------------------------------------------------------
   # Session store — where CPEX persists taint labels.
@@ -263,12 +292,10 @@ routes:
   - tool: search_repos
     pre_invocation:
       - "require(team.engineering | team.security)"
-      - cel:
-          expr: |
-            (has(role.engineer) && role.engineer && args.visibility == "internal")
-            || (has(role.security) && role.security)
+      - opa:
+          query: data.authz.allow
           on_deny:
-            - "deny('engineering may read internal repos only; security may read any', 'cel.policy_denied')"
+            - "deny('engineering may read internal repos only; security may read any', 'opa.policy_denied')"
       - "delegate(github-oauth, target: github-api, audience: github-api, permissions: [repo:read:internal])"
       - "!(delegation.granted.permissions contains 'repo:read:internal'): deny"
       - "run(audit-log)"
@@ -284,8 +311,8 @@ routes:
   # adjustment over $10K requires the requester's manager to approve
   # out-of-band (CIBA), and the approval is bound to the live amount
   # (`scope`) so it can't be replayed against a larger change. This
-  # route is PDP-independent (no cedar:/cel: step), so it behaves
-  # identically under cpex.yaml and cpex-cel.yaml.
+  # route is PDP-independent (no cedar:/cel:/opa: step), so it behaves
+  # identically under all three variants.
   - tool: adjust_compensation
     pre_invocation:
       - "require(role.hr)"

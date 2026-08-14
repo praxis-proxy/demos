@@ -9,7 +9,7 @@
 #
 # This demonstrates a field-level plugin in action — caught BEFORE
 # the email backend is touched. The audit-logger plugin is ordered
-# ahead of pii-scan in the policy chain (see cpex.yaml), so it emits
+# ahead of pii-scan in the policy chain (see policy.yaml), so it emits
 # its observation record before the PII deny short-circuits the
 # chain — the denied attempt is still on the audit trail.
 #

@@ -215,7 +215,7 @@ below. Scenario 11 needs the full stack (Keycloak CIBA plus the auth-channel UI)
 ## Alternatives: CEL or OPA instead of Cedar
 
 Scenarios 04 and 05 gate `search_repos` through a policy decision point. The
-default config (`cpex.yaml`) uses Cedar. Two alternate configs express the same
+default config (`policy.yaml`) uses Cedar. Two alternate configs express the same
 decision with CEL (Common Expression Language) and with OPA/Rego:
 
 ```bash
@@ -230,7 +230,7 @@ GATEWAY_CONFIG=praxis-opa.yaml ./restart.sh
 
 The backends differ in how the rule is authored, not in the outcome:
 
-| | Cedar (`cpex.yaml`) | CEL (`cpex-cel.yaml`) | OPA (`cpex-opa.yaml`) |
+| | Cedar (`policy.yaml`) | CEL (`policy-cel.yaml`) | OPA (`policy-opa.yaml`) |
 |---|---|---|---|
 | Where the rule lives | `policy_text` block (Cedar policy set) | inline `cel: { expr }` on the route | `modules:` Rego text, queried by rule path |
 | The rule | `permit(...) when { principal.roles.contains("engineer") && resource.visibility == "internal" }` | `(has(role.engineer) && role.engineer && args.visibility == "internal") \|\| (has(role.security) && role.security)` | `allow if { input.role.engineer == true; input.args.visibility == "internal" }` plus a second `allow` for security |
@@ -262,11 +262,11 @@ the session. `send_email` then refuses to send when the session carries it:
 
 The produce-then-consume spans two separate tool calls:
 
-1. Produce. `taint(secret, session)` records the label. cpex persists it to the
-   session store when the request ends.
+1. Produce. `taint(secret, session)` records the label. The engine persists it to
+   the session store when the request ends.
 2. Persist and scope. The store is keyed by `H(subject : session_id)`. The
-   session id comes from the `X-Session-Id` header, which the praxis `cpex`
-   filter maps to `agent.session_id`. cpex binds it to the resolved subject, so
+   session id comes from the `X-Session-Id` header, which the `policy` filter
+   maps to `agent.session_id`. The engine binds it to the resolved subject, so
    the same id under a different user is a different bucket.
 3. Consume. On the next request in that session the stored label is hydrated into
    `security.labels`, and the `send_email` predicate reads it to deny.
@@ -281,7 +281,7 @@ not the content, which is what separates it from scenario 07's content-based PII
 deny. Scenario 09 shows the taint cannot cross principals.
 
 Tainting is independent of the PDP, so 08 and 09 behave the same under both
-`cpex.yaml`, `cpex-cel.yaml`, and `cpex-opa.yaml`.
+`policy.yaml`, `policy-cel.yaml`, and `policy-opa.yaml`.
 
 ### Where taint is stored
 
@@ -435,7 +435,7 @@ implementations, and `gateway/src/main.rs` hands them to the policy filter with
 
 That makes this demo the worked example of extending the engine. To use your own
 PII detector or point audit at a SIEM, replace one line in
-`register_host_plugins()` — `cpex.yaml` does not change, because the policy names
+`register_host_plugins()` — `policy.yaml` does not change, because the policy names
 a `kind:` and the host decides what implements it. A `kind:` with no registration
 fails at startup naming the kind, rather than loading a gateway whose PII gate
 silently never runs.
@@ -454,12 +454,12 @@ the padding, so the wire stays correct. This is documented in the filter source.
 
 | File or directory | Purpose |
 |---|---|
-| `praxis.yaml` | Praxis listener and filter chain (`mcp` -> `cpex` -> `router` -> `load_balancer`); loads `cpex.yaml` |
-| `cpex.yaml` | CPEX policy: plugins, routes, Cedar PDP policy text |
-| `praxis-cel.yaml` | Same listener as `praxis.yaml`, loads `cpex-cel.yaml`. Run via `GATEWAY_CONFIG=praxis-cel.yaml` |
-| `cpex-cel.yaml` | CEL variant: `search_repos` uses an inline `cel:` expression, no `apl:` wrapper |
-| `praxis-opa.yaml` | Same listener as `praxis.yaml`, loads `cpex-opa.yaml`. Run via `GATEWAY_CONFIG=praxis-opa.yaml` |
-| `cpex-opa.yaml` | OPA variant: a Rego module under `pdp:`, queried by `search_repos` with `opa: { query }` |
+| `praxis.yaml` | Praxis listener and filter chain (`mcp` -> `policy` -> `router` -> `load_balancer`); loads `policy.yaml` |
+| `policy.yaml` | Policy document: plugins, routes, Cedar PDP policy text |
+| `praxis-cel.yaml` | Same listener as `praxis.yaml`, loads `policy-cel.yaml`. Run via `GATEWAY_CONFIG=praxis-cel.yaml` |
+| `policy-cel.yaml` | CEL variant: `search_repos` uses an inline `cel:` expression, no `apl:` wrapper |
+| `praxis-opa.yaml` | Same listener as `praxis.yaml`, loads `policy-opa.yaml`. Run via `GATEWAY_CONFIG=praxis-opa.yaml` |
+| `policy-opa.yaml` | OPA variant: a Rego module under `pdp:`, queried by `search_repos` with `opa: { query }` |
 | `docker-compose.yml` | Keycloak (8081), hr-mcp (9100), valkey (6379), and auth-channel (5001) |
 | `keycloak/realm-export.json` | Realm with users, clients, STE v2, and CIBA + the channel SPI |
 | `hr-mcp-server/` | Python mock MCP server (Dockerfile and `server.py`), incl. `adjust_compensation` |
@@ -479,7 +479,7 @@ The filter source is in the praxis repository at
 [`filter/src/builtins/http/security/policy/`](https://github.com/praxis-proxy/praxis/tree/main/filter/src/builtins/http/security/policy),
 behind the `policy-engine` Cargo feature on `praxis-proxy-filter` (registered
 under the YAML filter name `policy`). That feature brings in all three decision
-points — Cedar, CEL and OPA — so one binary serves `cpex.yaml`, `cpex-cel.yaml`
-and `cpex-opa.yaml`. See the filter's own module docs there for configuration and
+points — Cedar, CEL and OPA — so one binary serves `policy.yaml`, `policy-cel.yaml`
+and `policy-opa.yaml`. See the filter's own module docs there for configuration and
 internals.
 

@@ -1,23 +1,8 @@
 # Praxis listener for the HR demo, OPA variant. Identical to
-# praxis.yaml except the policy filter loads cpex-opa.yaml (OPA/Rego PDP)
-# instead of cpex.yaml (Cedar PDP). Run with:
+# praxis.yaml except the policy filter loads policy-opa.yaml (OPA/Rego PDP)
+# instead of policy.yaml (Cedar PDP). Run with:
 #
 #   GATEWAY_CONFIG=praxis-opa.yaml ./restart.sh
-#
-# The chain order is the load-bearing thing:
-#
-#   1. mcp   — Praxis's built-in JSON-RPC envelope parser. Sets
-#              `mcp.method` / `mcp.name` in ctx.filter_metadata,
-#              which our cpex filter reads to dispatch CMF.
-#
-#   2. cpex  — identity (X-User-Token + Authorization), APL policy
-#              (require(role.hr) + delegate(workday-oauth, …)),
-#              and args rewriting (redact(args.ssn) when no
-#              perm.view_ssn). `body_access: read_write` enables
-#              the JSON-RPC re-serialization round-trip.
-#
-#   3. router — forwards everything reaching here to the mock HR
-#              MCP server running on the host at port 9100.
 
 listeners:
   - name: gateway
@@ -34,7 +19,7 @@ filter_chains:
         # into ctx.filter_metadata.
 
       - filter: policy
-        config_path: ./cpex-opa.yaml
+        config_path: ./policy-opa.yaml
         body_access: read_write
 
       - filter: router
