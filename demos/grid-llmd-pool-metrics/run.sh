@@ -9,6 +9,8 @@ args=()
 for arg in "$@"; do
     if [[ "${arg}" == "--kv-cache" ]]; then
         export FORGE_CONFIG_NAME="forge-kv-cache.yaml"
+        # Keep the flag so xtask records and evaluates the selected flavor.
+        args+=("${arg}")
     else
         args+=("${arg}")
     fi
