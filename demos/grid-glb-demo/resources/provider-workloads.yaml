@@ -48,6 +48,11 @@ spec:
               value: "20"
             - name: MOCK_TIME_FACTOR_UNDER_LOAD
               value: "2.0"
+            - name: MOCK_EXPECTED_BEARER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: vcr-inference-credential
+                  key: token
           ports:
             - name: http
               containerPort: 8000
