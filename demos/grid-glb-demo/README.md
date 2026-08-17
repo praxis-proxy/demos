@@ -6,6 +6,10 @@ edge. The provider clusters run CPU-only `vllm-vcr` backends serving
 `Qwen/Qwen3-0.6B`; the east provider cluster hosts two independent VCR
 providers, proving that Grid does not assume one provider per cluster.
 
+## Video Demonstration
+
+https://github.com/user-attachments/assets/684ff927-5bb0-4fc8-afa1-bdac71bf41df
+
 ## Topology
 
 ```text

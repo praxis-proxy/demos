@@ -10,6 +10,10 @@ overlay delivery, Praxis routing -- runs its production code path.
 No GPU or model weights are required. The vllm-rs frontend downloads only the
 tokenizer from Hugging Face at startup.
 
+## Video Demonstration
+
+https://github.com/user-attachments/assets/55e76af4-1fda-4754-b3f0-26cc7f65a5b0
+
 ## Architecture
 
 ```text
