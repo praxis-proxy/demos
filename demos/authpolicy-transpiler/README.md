@@ -82,7 +82,7 @@ That single command:
 1. Starts **Keycloak** (`e2e/docker-compose.yml`, realm `e2e/keycloak/realm-export.json`) and waits for OIDC discovery.
 2. Transpiles `examples/jwt-cel-http.yaml` into `e2e/out/` (policy doc + Praxis filter block).
 3. Injects a localhost-dev `insecure_http` shim into the emitted JWKS `decoding_key` (never needed with an https IdP).
-4. Builds **Praxis** from the sibling `../../../../praxis` checkout with `--features policy-engine` (`e2e/build-praxis.sh`; override with `PRAXIS_BIN` / `PRAXIS_DIR` / `PRAXIS_GIT_URL`).
+4. Builds **Praxis** with `--features policy-engine` (`e2e/build-praxis.sh`) — from the sibling `../../../../praxis` checkout if there is one, otherwise a clone at the **pinned commit** in `DEFAULT_GIT_REF`, so a run is reproducible rather than tracking a moving branch. Override with `PRAXIS_BIN` / `PRAXIS_DIR` / `PRAXIS_GIT_URL` / `PRAXIS_GIT_REF` (`PRAXIS_GIT_REF=main` tracks the branch).
 5. Starts a tiny echo backend (`:9200`) and the gateway (`:8095`, `e2e/praxis.yaml`: `policy` → `router` → `load_balancer`).
 6. Mints `alice`/`bob` tokens (`e2e/mint-token.sh`) and exercises the CEL policy.
 

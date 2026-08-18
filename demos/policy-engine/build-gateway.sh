@@ -16,11 +16,19 @@
 #   PRAXIS_DIR                          path to a local praxis checkout (symlinked)
 #   existing gateway/.praxis            reused as-is
 #   otherwise                           clone PRAXIS_GIT_URL @ PRAXIS_GIT_REF,
-#                                       defaulting to upstream praxis on main
+#                                       defaulting to the pinned commit below
+#
+# The default ref is a commit, not a branch. praxis main moves, and the demo
+# builds it from source, so tracking a branch means the demo can break without
+# anything here changing. PRAXIS_GIT_REF=main opts back into tracking.
 #
 # Other knobs:
 #   GATEWAY_PROFILE=release|debug       (default: release)
 set -euo pipefail
+
+# praxis main @ #943, the commit that moved the policy filter onto the Praxis
+# Policy Engine. Verified with this demo end to end. Bump deliberately.
+DEFAULT_PRAXIS_REF="c9c2a46898ebd47f58cffde5865f9e976078fa6e"
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/gateway"
 PRAXIS_LINK="$DIR/.praxis"
@@ -39,16 +47,22 @@ elif [ -d "$PRAXIS_LINK/.git" ] && [ -z "${PRAXIS_GIT_URL:-}" ]; then
   echo "gateway: .praxis (existing clone, reused as-is)" >&2
 else
   url="${PRAXIS_GIT_URL:-https://github.com/praxis-proxy/praxis.git}"
-  ref="${PRAXIS_GIT_REF:-main}"
+  ref="${PRAXIS_GIT_REF:-$DEFAULT_PRAXIS_REF}"
   if [ -d "$PRAXIS_LINK/.git" ]; then
     echo "gateway: updating .praxis -> $ref ($url)" >&2
-    git -C "$PRAXIS_LINK" fetch --quiet --tags --force origin "$ref"
-    git -C "$PRAXIS_LINK" checkout --quiet -B "$ref" FETCH_HEAD
+    git -C "$PRAXIS_LINK" fetch --quiet --tags --force origin "$ref" 2>/dev/null \
+      || git -C "$PRAXIS_LINK" fetch --quiet --tags --force origin
+    # Detach rather than -B: a commit ref is not a branch name.
+    git -C "$PRAXIS_LINK" checkout --quiet --detach "$ref" 2>/dev/null \
+      || git -C "$PRAXIS_LINK" checkout --quiet --detach FETCH_HEAD
   else
     echo "gateway: cloning .praxis <- $url @ $ref" >&2
     rm -rf "$PRAXIS_LINK"
-    git clone --quiet --branch "$ref" "$url" "$PRAXIS_LINK"
+    # --branch takes a branch or tag, never a commit, so clone then detach.
+    git clone --quiet "$url" "$PRAXIS_LINK"
+    git -C "$PRAXIS_LINK" checkout --quiet --detach "$ref"
   fi
+  echo "gateway: .praxis at $(git -C "$PRAXIS_LINK" rev-parse --short HEAD)" >&2
 fi
 
 # 2. Build.

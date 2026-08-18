@@ -16,7 +16,8 @@
 #
 # Env:
 #   PRAXIS_GIT_URL  git remote to clone (default below)
-#   PRAXIS_GIT_REF  branch / tag / commit to build (default: main)
+#   PRAXIS_GIT_REF  branch / tag / commit to build (default: the pinned
+#                   commit below; pass `main` to track the branch instead)
 #   PRAXIS_SRC      clone destination (default: ./.praxis-src, git-ignored)
 #
 # Progress goes to stderr; ONLY the binary path is printed to stdout, so
@@ -27,7 +28,11 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 DEFAULT_GIT_URL="https://github.com/praxis-proxy/praxis.git"
-DEFAULT_GIT_REF="main"
+# A commit, not a branch. praxis main moves and this demo builds it from source,
+# so tracking a branch means the demo can break with no change here. This is
+# praxis main @ #943 (the Praxis Policy Engine port), verified with this demo.
+# PRAXIS_GIT_REF=main opts back into tracking.
+DEFAULT_GIT_REF="c9c2a46898ebd47f58cffde5865f9e976078fa6e"
 # This script lives at demos/authpolicy-transpiler/e2e/, so a praxis checkout
 # sitting beside praxis-demos/ is four levels up.
 SIBLING="../../../../praxis"
@@ -55,12 +60,13 @@ clone_or_update() {
     log "updating $src → $ref ($url)"
     git -C "$src" fetch --tags --force origin "$ref" 2>/dev/null \
       || git -C "$src" fetch --tags --force origin
-    git -C "$src" checkout -q "$ref" 2>/dev/null \
-      || git -C "$src" checkout -q FETCH_HEAD
+    git -C "$src" checkout -q --detach "$ref" 2>/dev/null \
+      || git -C "$src" checkout -q --detach FETCH_HEAD
   else
     log "cloning $url @ $ref → $src"
-    git clone --branch "$ref" "$url" "$src" 2>/dev/null \
-      || { git clone "$url" "$src" && git -C "$src" checkout -q "$ref"; }
+    # --branch takes a branch or tag, never a commit, so clone then detach.
+    git clone "$url" "$src"
+    git -C "$src" checkout -q --detach "$ref"
   fi
   printf '%s\n' "$src"
 }

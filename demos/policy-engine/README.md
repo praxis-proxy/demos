@@ -171,20 +171,28 @@ carries the `policy-engine` feature yet, so the demo builds praxis from source.
 |---|---|
 | `PRAXIS_DIR=<path>` | Symlinks a local praxis checkout as `gateway/.praxis`. |
 | an existing `gateway/.praxis` | Reused as-is, never fetched into. |
-| default | Clones `PRAXIS_GIT_URL` (upstream praxis) at `PRAXIS_GIT_REF` (`main`). |
+| default | Clones `PRAXIS_GIT_URL` (upstream praxis) at `PRAXIS_GIT_REF`, which defaults to a **pinned commit**, not a branch. |
 
 ```bash
-# Nothing to set — clones upstream praxis on main:
+# Nothing to set — clones upstream praxis at the pinned commit:
 ./restart.sh
 
 # Against a local checkout:
 PRAXIS_DIR=~/src/praxis ./restart.sh
 
-# Against a specific ref:
+# Against a specific ref — a branch, tag or commit:
+PRAXIS_GIT_REF=main ./restart.sh      # track the branch instead of the pin
 PRAXIS_GIT_REF=v0.6.0 ./restart.sh
 
 # GATEWAY_PROFILE=debug for a faster build; GATEWAY_BIN=<path> to skip building.
 ```
+
+Both upstreams are pinned so a demo run is reproducible: praxis to the commit in
+`build-gateway.sh`'s `DEFAULT_PRAXIS_REF`, and praxis-ai to the `rev` in
+`gateway/Cargo.toml`. Building praxis from a moving branch meant the demo could
+break with nothing here changing, which is exactly what happened when praxis
+changed an admin-endpoint signature under the pinned praxis-ai. Bump either pin
+deliberately, and re-run the scenarios when you do.
 
 > Once a praxis release carries `policy-engine`, drop the `[patch]` in
 > `gateway/Cargo.toml` and the gateway builds against published praxis directly.
