@@ -12,7 +12,7 @@ name = "policy-engine-gateway"
 path = "src/main.rs"
 
 [dependencies]
-praxis-ai-proxy = { git = "https://github.com/praxis-proxy/ai", rev = "3ef40ace44dbb0e98dde84c83b504a490a1c30c5", features = ["praxis-main"] }
+praxis-ai-proxy = { git = "https://github.com/praxis-proxy/ai", rev = "333f93d5e3aef60a86897412da617012fc20267e", features = ["praxis-main"] }
 # Declared only to turn on `policy-engine` graph-wide.
 praxis-proxy-filter = { version = "0.5", features = ["policy-engine"] }
 
