@@ -1,0 +1,110 @@
+# Praxis Policy Engine HR demo — bring up Keycloak + a mock HR MCP server.
+# The policy gateway itself runs on the host (built by
+# `./build-gateway.sh`, i.e. `cargo build --release --features
+# policy-engine -p praxis-proxy`), not in compose — that way you can
+# rebuild / re-run it without touching the IdP or MCP state.
+#
+#   docker compose up -d              # bring up keycloak + mcp server
+#   docker compose logs -f hr-mcp     # watch what reaches the upstream
+#   docker compose down -v            # tear it all down (loses Keycloak state)
+
+services:
+  keycloak:
+    # 26.2+ ships Standard Token Exchange v2 — simpler than v1's
+    # fine-grained authz-services permissions. See the README's
+    # "Architectural patterns" section for the difference.
+    # Built from ./keycloak/Dockerfile — stock Keycloak 26.2 plus the CIBA
+    # HTTP authentication-channel SPI compiled from keycloak/ciba-spi/.
+    build:
+      context: ./keycloak
+    container_name: policy-demo-keycloak
+    command:
+      - start-dev
+      - --import-realm
+      - --http-port=8081
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      # Pin a *fixed* frontend URL (full URL, not a bare hostname). Under
+      # HostnameV2, a bare `localhost` resolves scheme/port per request Host,
+      # so the gateway's poll (arriving as localhost:8081) and the
+      # auth-channel's CIBA approval callback (arriving as keycloak:8081)
+      # resolve *different* issuer/realm contexts — the approval registers in
+      # one and the poll reads the other, so an approved request never
+      # applies. A fixed URL makes issuer/context host-independent, so both
+      # sides agree. Backchannel stays non-dynamic (default) so it uses this
+      # same fixed URL rather than the request Host. See CIBA-HOSTNAME-ISSUE.md.
+      KC_HOSTNAME: http://localhost:8081
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
+      # Standard Token Exchange v2 — the source client opts in via
+      # `standard.token.exchange.enabled` (see praxis-gateway in
+      # realm-export.json) and can optionally allowlist which
+      # audience clients it'll exchange for. Simpler config than
+      # v1's per-target authorization-services permission.
+      KC_FEATURES: token-exchange-standard
+      # CIBA decoupled-auth channel. The custom SPI (mounted below) POSTs
+      # each pending approval to the auth-channel web UI; the approver
+      # clicks Approve there and the UI calls Keycloak back. Provider id
+      # `http-authentication-channel`; the URI is the compose service.
+      KC_SPI_CIBA_AUTH_CHANNEL_PROVIDER: http-authentication-channel
+      KC_SPI_CIBA_AUTH_CHANNEL_HTTP_AUTHENTICATION_CHANNEL_HTTP_AUTHENTICATION_CHANNEL_URI: "http://auth-channel:5001/ciba/auth"
+    volumes:
+      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+    ports:
+      - "8081:8081"
+    healthcheck:
+      # Keycloak 26 doesn't ship curl/wget by default, but it does
+      # expose /health/ready under management.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8081 && echo -e 'GET /realms/policy-demo HTTP/1.0\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q ' 200 '"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  hr-mcp:
+    build:
+      context: ./hr-mcp-server
+    container_name: policy-demo-hr-mcp
+    ports:
+      - "9100:9100"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:9100/healthz\")'"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  # Session-store backend for engine taint labels. The policy docs point
+  # `global.session_store` at kind: valkey, endpoint localhost:6379, so
+  # the `secret` label written by get_compensation persists here (keyed
+  # by H(subject:session_id)) and survives a gateway restart — unlike the
+  # in-memory default. The gateway runs on the host and reaches Valkey
+  # via the published port below.
+  # CIBA approval UI — the manager's "phone". Keycloak's CIBA channel SPI
+  # POSTs pending approvals here; the approver opens http://localhost:5001
+  # and clicks Approve/Deny, which calls Keycloak back. Reachable from the
+  # browser on :5001 and from Keycloak on the compose net as `auth-channel`.
+  auth-channel:
+    build:
+      context: ./auth-channel
+    container_name: policy-demo-auth-channel
+    environment:
+      # Where the UI POSTs the approval callback — the demo's own Keycloak,
+      # reached on the compose network (it listens on 8081).
+      KEYCLOAK_BASE: "http://keycloak:8081"
+      KEYCLOAK_REALM: "policy-demo"
+    ports:
+      - "5001:5001"
+
+  valkey:
+    image: valkey/valkey:8
+    container_name: policy-demo-valkey
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 2s

@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024 Praxis Contributors
 
-//! Kuadrant → CPEX CEL namespace remapping (plan R20).
+//! Kuadrant → Praxis Policy Engine CEL namespace remapping (plan R20).
 //!
 //! Kuadrant predicates reference an Envoy/Authorino attribute vocabulary
 //! (`auth.identity.*`, `request.method/path/host`, `request.headers[...]`)
-//! that does not exist verbatim in CPEX's evaluation bag. CPEX surfaces the
+//! that does not exist verbatim in the engine's evaluation bag. The engine surfaces the
 //! HTTP request line/headers on the `HttpExtension` as `http.method` /
 //! `http.path` / `http.host` / `http.request_headers.*`.
 //!
-//! Identity is special. CPEX's `standard` claim mapper does not surface a raw
+//! Identity is special. The engine's `standard` claim mapper does not surface a raw
 //! `claim.*` bag; it maps `roles` / `permissions` / `groups`|`teams` into
 //! per-name booleans exposed to CEL as `role.<name>` / `perm.<name>` /
 //! `team.<name>`. So the common Kuadrant RBAC idiom `'<value>' in
@@ -19,7 +19,7 @@
 //! lexical `auth.identity.* → claim.*` rewrite and remain a documented
 //! runtime gap wherever `claim.*` is unpopulated.
 //!
-//! This module rewrites the recognized prefixes to their CPEX equivalents
+//! This module rewrites the recognized prefixes to their engine equivalents
 //! and then scans for any *un-remapped* reference into a source namespace
 //! (`auth.*`, `request.*`, `context.*`, `metadata.*`). A leftover reference
 //! is returned as a [`Remap::Gap`] so the translator reports it and refuses
@@ -38,13 +38,13 @@
 /// Result of remapping a single Kuadrant CEL predicate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Remap {
-    /// Fully remapped to CPEX namespaces.
+    /// Fully remapped to the engine's namespaces.
     Ok(String),
     /// An un-remappable reference remains; the string names it.
     Gap { reference: String },
 }
 
-/// Remap a Kuadrant CEL predicate into CPEX's bag vocabulary.
+/// Remap a Kuadrant CEL predicate into the engine's bag vocabulary.
 pub(crate) fn remap(expr: &str) -> Remap {
     // Order matters: rewrite the most specific prefixes first so that, e.g.,
     // `context.request.http.path` is consumed before a bare `request.`
@@ -66,7 +66,7 @@ pub(crate) fn remap(expr: &str) -> Remap {
     out = rewrite_headers(&out);
 
     // RBAC membership idiom: `'<value>' in auth.identity.{roles|permissions|
-    // groups|teams}` → `(has(<ns>.<value>) && <ns>.<value>)`, since CPEX
+    // groups|teams}` → `(has(<ns>.<value>) && <ns>.<value>)`, since the engine
     // exposes these as per-name booleans, not arrays. Runs before the generic
     // identity rewrite below so the membership forms are consumed first.
     out = rewrite_membership(&out);
@@ -81,7 +81,7 @@ pub(crate) fn remap(expr: &str) -> Remap {
     Remap::Ok(out)
 }
 
-/// Rewrite every `request.headers...` access in `expr` to the CPEX
+/// Rewrite every `request.headers...` access in `expr` to the engine's
 /// `http.request_headers.<lowercased-name>` form. Unrecognized header
 /// access shapes are left intact so [`leftover_reference`] flags them.
 fn rewrite_headers(expr: &str) -> String {
@@ -107,8 +107,8 @@ fn rewrite_headers(expr: &str) -> String {
 }
 
 /// Rewrite the Kuadrant RBAC membership idiom
-/// `'<value>' in auth.identity.{roles|permissions|groups|teams}` into CPEX's
-/// guarded boolean form `(has(<ns>.<value>) && <ns>.<value>)`. CPEX's standard
+/// `'<value>' in auth.identity.{roles|permissions|groups|teams}` into the engine's
+/// guarded boolean form `(has(<ns>.<value>) && <ns>.<value>)`. The engine's standard
 /// claim mapper surfaces these claims as per-name booleans (`role.hr`,
 /// `perm.view_ssn`, `team.engineering`), not as arrays, so an array-membership
 /// test would never match. Non-membership references are left untouched for
@@ -142,7 +142,7 @@ fn rewrite_membership(expr: &str) -> String {
 }
 
 /// If `tail` (the text immediately after a closing quote) begins with
-/// ` in auth.identity.<field>` for a known RBAC field, return the CPEX boolean
+/// ` in auth.identity.<field>` for a known RBAC field, return the engine's boolean
 /// replacement for `'<literal>' in auth.identity.<field>` and the number of
 /// bytes of `tail` consumed. Returns `None` for any other shape.
 fn membership_replacement(literal: &str, tail: &str) -> Option<(String, usize)> {

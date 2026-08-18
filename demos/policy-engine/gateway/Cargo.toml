@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Praxis Contributors
+
+[package]
+name = "policy-engine-gateway"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "policy-engine-gateway"
+path = "src/main.rs"
+
+[dependencies]
+praxis-ai-proxy = { git = "https://github.com/praxis-proxy/ai", rev = "333f93d5e3aef60a86897412da617012fc20267e", features = ["praxis-main"] }
+# Declared only to turn on `policy-engine` graph-wide.
+praxis-proxy-filter = { version = "0.5", features = ["policy-engine"] }
+
+# Unpublished reference plugins the demo registers itself, in main.rs. This is
+# the worked example of extending the engine with a plugin it does not bundle.
+praxis-policy-plugin-pii-scanner = { git = "https://github.com/praxis-proxy/policy", tag = "v0.1.0" }
+praxis-policy-plugin-audit-logger = { git = "https://github.com/praxis-proxy/policy", tag = "v0.1.0" }
+
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+
+[target.'cfg(unix)'.dependencies]
+tikv-jemallocator = "0.7"
+
+# No published praxis carries `policy-engine`, so build it from the local
+# checkout `build-gateway.sh` populates at `.praxis/` (gitignored).
+[patch.crates-io]
+praxis-proxy-core = { path = ".praxis/core" }
+praxis-proxy-filter = { path = ".praxis/filter" }
+praxis-proxy-protocol = { path = ".praxis/protocol" }
+praxis-proxy-tls = { path = ".praxis/tls" }
+# The plugins above resolve `praxis-policy-core` from the git checkout, while
+# praxis resolves it from crates.io. Two copies means two `PluginFactory`
+# traits and registration stops typechecking, so pin both to the git one.
+praxis-policy-core = { git = "https://github.com/praxis-proxy/policy", tag = "v0.1.0" }
+
+# praxis-ai pins praxis-proxy-* by git tag, which `[patch.crates-io]` cannot
+# redirect. Without this the AI server registers from the tagged filter, which
+# has no `policy-engine`, and the `policy` filter silently never loads.
+[patch."https://github.com/praxis-proxy/praxis.git"]
+praxis-proxy-core = { path = ".praxis/core" }
+praxis-proxy-filter = { path = ".praxis/filter" }
+praxis-proxy-protocol = { path = ".praxis/protocol" }
+praxis-proxy-tls = { path = ".praxis/tls" }

@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.96"
 license = "MIT"
 publish = false
-description = "Offline CLI that transpiles a Kuadrant AuthPolicy into Praxis policy-filter + CPEX policy config (demo)."
+description = "Offline CLI that transpiles a Kuadrant AuthPolicy into Praxis policy-filter + policy-document config (demo)."
 
 [[bin]]
 name = "authpolicy-transpiler"

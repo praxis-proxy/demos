@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024 Praxis Contributors
 
-//! Translate a parsed [`AuthPolicy`] into a CPEX policy document, a Praxis
+//! Translate a parsed [`AuthPolicy`] into a policy document, a Praxis
 //! `policy`-filter block, and a coverage report.
 //!
 //! Translation is best-effort but **fail-closed** (plan R19): if a policy
 //! declares authorization rules and none of them survive translation, the
-//! emitted CPEX policy gets a `require(false)` deny-all step and the report
+//! emitted policy gets a `require(false)` deny-all step and the report
 //! records a [`Severity::Fatal`] entry so the CLI exits non-zero.
 //!
 //! Kuadrant `patternMatching`/`when` predicates are CEL, so each translated
-//! rule is emitted as a `cel: { expr }` PDP step (dispatched to CPEX's
+//! rule is emitted as a `cel: { expr }` PDP step (dispatched to the engine's
 //! bundled `cel` resolver — full CEL), not wrapped in `require(...)`, whose
 //! APL predicate DSL is a different, non-CEL language. The APL-native
 //! `require(...)` form is used only for the `require(authenticated)`
@@ -27,7 +27,7 @@ use serde_yaml::Value;
 use super::{
     cel::{self, Remap},
     emit::{
-        AuthorizationOut, CpexDoc, DecodingKey, FilterBlock, GlobalOut, JwtConfig, PdpEntry,
+        AuthorizationOut, PolicyDoc, DecodingKey, FilterBlock, GlobalOut, JwtConfig, PdpEntry,
         PluginEntry, PluginSettings, PolicyStep, TrustedIssuer,
     },
     model::{AuthPolicy, AuthScheme, AuthnMethod, AuthzMethod, PatternExpr, ResponseSpec, Spec},
@@ -44,8 +44,8 @@ const DEFAULT_JWT_ALGORITHMS: [&str; 1] = ["RS256"];
 
 /// The output of transpiling one `AuthPolicy`.
 pub(crate) struct Transpiled {
-    /// Serialized CPEX policy document (YAML).
-    pub cpex_doc: String,
+    /// Serialized Praxis Policy Engine policy document (YAML).
+    pub policy_doc: String,
     /// Serialized Praxis `policy` filter block (YAML).
     pub filter_block: String,
     /// Coverage report.
@@ -94,9 +94,9 @@ pub(crate) fn transpile(policy: &AuthPolicy, slug: &str) -> Transpiled {
     let when = top_level_when(&policy.spec, &mut report);
     let steps = gate_with_when(policy_steps, when.as_deref());
 
-    // Emit under the CPEX `global` policy using the canonical
+    // Emit under the engine's `global` policy using the canonical
     // `authentication:` + `authorization:` block form (no `apl:` wrapper) —
-    // the designed home for catch-all, non-entity HTTP policies. CPEX
+    // the designed home for catch-all, non-entity HTTP policies. The engine
     // evaluates it for generic HTTP requests via the `cmf.http_request` hook.
     // A `cel:` step needs the `cel` resolver declared into the policy's PDP
     // router; without `pdp: [{ kind: cel }]` every `cel:` step fails closed
@@ -117,7 +117,7 @@ pub(crate) fn transpile(policy: &AuthPolicy, slug: &str) -> Transpiled {
             pdp,
         });
 
-    let doc = CpexDoc {
+    let doc = PolicyDoc {
         plugin_settings: PluginSettings {
             routing_enabled: true,
         },
@@ -127,11 +127,11 @@ pub(crate) fn transpile(policy: &AuthPolicy, slug: &str) -> Transpiled {
 
     let filter_block = FilterBlock {
         filter: "policy".to_owned(),
-        config_path: format!("/etc/praxis/{slug}-cpex-policy.yaml"),
+        config_path: format!("/etc/praxis/{slug}-policy-doc.yaml"),
     };
 
     Transpiled {
-        cpex_doc: serde_yaml::to_string(&doc).unwrap_or_else(|e| format!("# emit error: {e}\n")),
+        policy_doc: serde_yaml::to_string(&doc).unwrap_or_else(|e| format!("# emit error: {e}\n")),
         filter_block: serde_yaml::to_string(&filter_block)
             .unwrap_or_else(|e| format!("# emit error: {e}\n")),
         report,
@@ -222,7 +222,7 @@ fn translate_authn(scheme: &AuthScheme, report: &mut Report) -> Vec<PluginEntry>
                     (None, Some(issuer)) => (
                         issuer.clone(),
                         Some(
-                            "issuerUrl maps to OIDC discovery, which CPEX identity/jwt does not perform; set decoding_key.url to the IdP's JWKS endpoint.",
+                            "issuerUrl maps to OIDC discovery, which the engine's identity/jwt does not perform; set decoding_key.url to the IdP's JWKS endpoint.",
                         ),
                     ),
                     (None, None) => (
@@ -500,7 +500,7 @@ fn pattern_to_cel(expr: &PatternExpr, ctx: &mut CelCtx<'_>) -> Option<String> {
                 ctx.report.skipped(
                     ctx.construct,
                     Severity::Warning,
-                    format!("CEL predicate references `{reference}`, which has no CPEX equivalent; dropped."),
+                    format!("CEL predicate references `{reference}`, which has no equivalent in the engine; dropped."),
                 );
                 None
             }
@@ -551,7 +551,7 @@ fn selector_to_cel(
                 ctx.construct,
                 Severity::Warning,
                 format!(
-                    "selector references `{reference}`, which has no CPEX equivalent; dropped."
+                    "selector references `{reference}`, which has no equivalent in the engine; dropped."
                 ),
             );
             return None;
@@ -694,27 +694,27 @@ spec:
             - predicate: \"request.method == 'GET'\"
 ",
         );
-        assert!(t.cpex_doc.contains("kind: identity/jwt"));
-        assert!(t.cpex_doc.contains("on_error: fail"));
-        assert!(t.cpex_doc.contains("RS256"));
-        // CEL was remapped into CPEX namespaces and emitted as a `cel:` step.
-        assert!(t.cpex_doc.contains("cel:"));
-        assert!(t.cpex_doc.contains("expr:"));
-        assert!(t.cpex_doc.contains("claim.email_verified"));
+        assert!(t.policy_doc.contains("kind: identity/jwt"));
+        assert!(t.policy_doc.contains("on_error: fail"));
+        assert!(t.policy_doc.contains("RS256"));
+        // CEL was remapped into the engine's namespaces and emitted as a `cel:` step.
+        assert!(t.policy_doc.contains("cel:"));
+        assert!(t.policy_doc.contains("expr:"));
+        assert!(t.policy_doc.contains("claim.email_verified"));
         // A `cel:` step requires the `cel` PDP resolver to be declared, or it
         // fails closed at runtime.
-        assert!(t.cpex_doc.contains("pdp:"));
-        assert!(t.cpex_doc.contains("kind: cel"));
+        assert!(t.policy_doc.contains("pdp:"));
+        assert!(t.policy_doc.contains("kind: cel"));
         // Quote-agnostic: serde_yaml may single-quote the expr scalar
         // (doubling inner quotes) depending on its leading character.
-        assert!(t.cpex_doc.contains("http.method =="));
+        assert!(t.policy_doc.contains("http.method =="));
         // Presence gate is the native `require(authenticated)`; the CEL
         // predicate is NOT wrapped in `require(...)`.
-        assert!(t.cpex_doc.contains("require(authenticated)"));
+        assert!(t.policy_doc.contains("require(authenticated)"));
         assert!(
-            !t.cpex_doc.contains("require(http.method"),
+            !t.policy_doc.contains("require(http.method"),
             "comparisons belong in a cel: step, not require(...);\n{}",
-            t.cpex_doc
+            t.policy_doc
         );
         assert!(!t.report.has_fatal());
     }
@@ -732,7 +732,7 @@ spec:
 ",
         );
         assert!(t.report.has_fatal(), "OPA-only authz must fail closed");
-        assert!(t.cpex_doc.contains("require(false)"));
+        assert!(t.policy_doc.contains("require(false)"));
     }
 
     #[test]
@@ -754,9 +754,9 @@ spec:
 ",
         );
         assert!(
-            t.cpex_doc.contains("'admin' in claim.realm_access.roles"),
+            t.policy_doc.contains("'admin' in claim.realm_access.roles"),
             "selector incl should lower to CEL `in`; got:\n{}",
-            t.cpex_doc
+            t.policy_doc
         );
         // Nested-claim warning should fire (realm_access.roles).
         assert!(
@@ -781,7 +781,7 @@ spec:
 ",
         );
         assert!(t.report.has_fatal());
-        assert!(t.cpex_doc.contains("require(false)"));
+        assert!(t.policy_doc.contains("require(false)"));
     }
 
     #[test]
@@ -825,20 +825,20 @@ spec:
         );
         // spec.when folds into each cel: step's expr (no route `when:` field
         // in the canonical global block). No authn here, so no presence gate.
-        assert!(t.cpex_doc.contains("pre_invocation:"));
-        assert!(t.cpex_doc.contains("cel:"));
+        assert!(t.policy_doc.contains("pre_invocation:"));
+        assert!(t.policy_doc.contains("cel:"));
         // Quote-agnostic anchors (serde_yaml single-quotes the `!(`-leading
         // scalar, doubling inner quotes).
-        assert!(t.cpex_doc.contains("http.host =="));
+        assert!(t.policy_doc.contains("http.host =="));
         assert!(
-            t.cpex_doc.contains(")) || ((claim.email_verified))"),
+            t.policy_doc.contains(")) || ((claim.email_verified))"),
             "spec.when should gate the rule inside the cel: expr; got:\n{}",
-            t.cpex_doc
+            t.policy_doc
         );
         assert!(
-            !t.cpex_doc.contains("require(authenticated)"),
+            !t.policy_doc.contains("require(authenticated)"),
             "no identity configured → no presence gate;\n{}",
-            t.cpex_doc
+            t.policy_doc
         );
     }
 
