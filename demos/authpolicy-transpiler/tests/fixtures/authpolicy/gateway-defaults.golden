@@ -1,4 +1,4 @@
-# == CPEX policy document ==
+# == Policy document ==
 plugin_settings:
   routing_enabled: true
 plugins:
@@ -31,7 +31,7 @@ global:
 
 # == Praxis filter block ==
 filter: policy
-config_path: /etc/praxis/gateway-defaults-cpex-policy.yaml
+config_path: /etc/praxis/gateway-defaults-policy-doc.yaml
 
 # == Coverage report ==
 AuthPolicy → Praxis coverage report

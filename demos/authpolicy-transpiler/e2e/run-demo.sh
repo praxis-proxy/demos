@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # End-to-end demo: transpile a Kuadrant AuthPolicy into a Praxis generic-HTTP
-# (L7) CEL policy, run it on Praxis + CPEX against a local Keycloak, and prove
+# (L7) CEL policy, run it on Praxis + the policy engine against a local Keycloak, and prove
 # the CEL decisions with real persona tokens.
 #
 # Self-contained: Keycloak (docker-compose.yml), token minting (mint-token.sh),
 # and the Praxis build (build-praxis.sh) all live in this directory. Praxis
-# runs on the HOST (built with the cpex-policy-engine feature); only Keycloak
+# runs on the HOST (built with the policy-engine feature); only Keycloak
 # runs in Docker.
 #
 # Requirements: docker (compose), cargo, python3, curl, jq.
@@ -22,13 +22,13 @@ cd "$(dirname "$0")"
 TRANSPILER_DIR=".."
 EXAMPLE_REL="examples/jwt-cel-http.yaml"
 OUT_DIR="$PWD/out"
-POLICY_DOC="$OUT_DIR/jwt-cel-http-cpex-policy.yaml"
+POLICY_DOC="$OUT_DIR/jwt-cel-http-policy-doc.yaml"
 GATEWAY_CONFIG="praxis.yaml"
 GATEWAY_LOG="gateway.log"
 GATEWAY_PORT=8095
 ECHO_PORT=9200
 KEYCLOAK_HOST="${KEYCLOAK_HOST:-http://localhost:8081}"
-KEYCLOAK_REALM="${KEYCLOAK_REALM:-cpex-demo}"
+KEYCLOAK_REALM="${KEYCLOAK_REALM:-policy-demo}"
 DISCOVERY_URL="${KEYCLOAK_HOST}/realms/${KEYCLOAK_REALM}/.well-known/openid-configuration"
 
 step() { printf "\n\033[1;34m[authpolicy-e2e]\033[0m %s\n" "$*"; }
@@ -69,7 +69,7 @@ printf "\n"
 curl -sf "$DISCOVERY_URL" >/dev/null 2>&1 || die "Keycloak not ready at $DISCOVERY_URL"
 ok "Keycloak realm '$KEYCLOAK_REALM' is up"
 
-# 2. Transpile the AuthPolicy → CPEX policy + Praxis filter block.
+# 2. Transpile the AuthPolicy → policy doc + Praxis filter block.
 step "transpiling $EXAMPLE_REL → $OUT_DIR"
 mkdir -p "$OUT_DIR"
 ( cd "$TRANSPILER_DIR" && cargo run --quiet -- "$EXAMPLE_REL" --out-dir "$OUT_DIR" >/dev/null )
@@ -77,7 +77,7 @@ mkdir -p "$OUT_DIR"
 ok "wrote $(basename "$POLICY_DOC") (+ filter block, coverage report)"
 
 # 3. Localhost-dev shim: the transpiler never emits `insecure_http` (a prod
-#    JWKS is https). Inject it so CPEX will fetch the http:// Keycloak JWKS.
+#    JWKS is https). Inject it so the engine will fetch the http:// Keycloak JWKS.
 #    NEVER do this in production — use an https JWKS endpoint instead.
 step "patching JWKS decoding_key with insecure_http (localhost dev only)"
 if grep -q "insecure_http:" "$POLICY_DOC"; then
@@ -93,7 +93,7 @@ else
   ok "injected insecure_http: true"
 fi
 
-# 4. Build Praxis (host binary, cpex-policy-engine feature).
+# 4. Build Praxis (host binary, policy-engine feature).
 step "building/resolving the Praxis binary"
 GATEWAY_BIN="${GATEWAY_BIN:-$(./build-praxis.sh)}"
 [ -x "$GATEWAY_BIN" ] || die "praxis binary not found at '$GATEWAY_BIN'"

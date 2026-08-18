@@ -86,14 +86,14 @@ def banner() -> None:
     lines = [
         f"\033[90m  ╔{'═' * W}╗\033[0m",
         row("authpolicy-transpiler", "\033[1;96m"),
-        row("Kuadrant AuthPolicy  →  Praxis + CPEX policy config", "\033[0;96m"),
+        row("Kuadrant AuthPolicy  →  Praxis Policy Engine config", "\033[0;96m"),
         row(),
         row("Best-effort translation with a coverage report — every", "\033[90m"),
         row("construct is translated, approximated, or reported as a gap.", "\033[90m"),
         row(),
         row("This demo shows:", "\033[97m"),
         row("  1. A Kuadrant AuthPolicy (JWT auth + CEL RBAC)", "\033[90m"),
-        row("  2. A clean translation to CPEX + a Praxis filter block", "\033[90m"),
+        row("  2. A clean translation to a policy doc + a Praxis filter block", "\033[90m"),
         row("  3. A coverage report that makes every gap visible", "\033[90m"),
         row("  4. Fail-closed safety: untranslatable authz denies all", "\033[90m"),
         row("  5. Writing the emitted artifacts to a directory", "\033[90m"),
@@ -117,7 +117,7 @@ def run_demo_acts() -> None:
     _run("cat examples/jwt-cel-http.yaml")
     pause(11.0)
 
-    section("3. Transpile it — clean translation to CPEX + Praxis filter")
+    section("3. Transpile it — clean translation to policy doc + Praxis filter")
     _run(f"{BIN.name} examples/jwt-cel-http.yaml")
     pause(12.0)
 
@@ -136,11 +136,11 @@ def run_demo_acts() -> None:
     sys.stdout.write(
         "\n\n\033[1;32m  ══════════════════════════════════════════════════════════\033[0m\n"
         "\033[1;32m  ✓  Demo complete — authpolicy-transpiler\033[0m\n"
-        "\033[0;32m     Kuadrant AuthPolicy → Praxis + CPEX, best-effort + reported\033[0m\n"
+        "\033[0;32m     Kuadrant AuthPolicy → Praxis Policy Engine, best-effort + reported\033[0m\n"
         "\033[1;32m  ══════════════════════════════════════════════════════════\033[0m\n"
         "\n"
         "     Run it:  cargo run -- examples/jwt-cel-http.yaml\n"
-        "     End-to-end on Praxis + CPEX:  cd e2e && ./run-demo.sh\n"
+        "     End-to-end on the Policy Engine:  cd e2e && ./run-demo.sh\n"
         "\n"
     )
     pause(6.0)
@@ -261,13 +261,13 @@ def verify() -> bool:
     content = CAST_FILE.read_text()
     checks = [
         ("Kuadrant AuthPolicy", "banner present"),
-        ("identity/jwt", "act 3: CPEX identity/jwt plugin emitted"),
+        ("identity/jwt", "act 3: engine identity/jwt plugin emitted"),
         ("require(authenticated)", "act 3: native presence gate"),
         ("translated: 4", "act 3: clean coverage report"),
         ("defaults/overrides", "act 4: gap reported"),
         ("require(false)", "act 5: fail-closed deny-all"),
         ("exit code: 1", "act 5: non-zero exit"),
-        ("cpex-policy.yaml", "act 6: artifacts written"),
+        ("policy-doc.yaml", "act 6: artifacts written"),
     ]
     ok = True
     for fragment, label in checks:

@@ -2,7 +2,7 @@
 #
 # Chain: policy → router → load_balancer. There is NO `mcp` filter and no
 # `body_access` — this is pure L7 admission control. The `policy` filter
-# resolves the JWT identity and evaluates the emitted `global` CPEX policy
+# resolves the JWT identity and evaluates the emitted `global` policy
 # (CEL over http.* + top-level claims) at request admission:
 #
 #   * allowed  → forwarded to the echo backend (HTTP 200)
@@ -24,7 +24,7 @@ filter_chains:
   - name: main
     filters:
       - filter: policy
-        config_path: ./out/jwt-cel-http-cpex-policy.yaml
+        config_path: ./out/jwt-cel-http-policy-doc.yaml
 
       - filter: router
         routes:
