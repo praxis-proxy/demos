@@ -16,7 +16,7 @@ use std::fmt::Write as _;
 /// How completely a construct was carried into the emitted output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Coverage {
-    /// Fully represented in the emitted CPEX doc / filter block.
+    /// Fully represented in the emitted policy doc / filter block.
     Translated,
     /// Partially represented; some fidelity is lost (detail says what).
     Approximated,

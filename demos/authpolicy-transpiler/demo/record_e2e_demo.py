@@ -8,7 +8,7 @@ End-to-end demo harness for the AuthPolicy transpiler (CLI pathway).
   Verify:   python demo/record_e2e_demo.py --verify
 
 Unlike record_demo.py (which shows the transpiler CLI), this drives the real
-`e2e/run-demo.sh`: it transpiles jwt-cel-http.yaml, runs the emitted CPEX policy
+`e2e/run-demo.sh`: it transpiles jwt-cel-http.yaml, runs the emitted policy
 on a live Praxis gateway against a local Keycloak, and proves the CEL decisions
 with alice/bob persona tokens. Requires docker + a Praxis checkout/binary.
 """
@@ -37,7 +37,7 @@ _PRAXIS_CANDIDATE = (REPO_ROOT / ".." / ".." / ".." / "praxis"
 BANNER_MARKER = "end-to-end on Praxis"
 
 INPUT_YAML = "examples/jwt-cel-http.yaml"
-OUTPUT_YAML = "e2e/out/jwt-cel-http-cpex-policy.yaml"
+OUTPUT_YAML = "e2e/out/jwt-cel-http-policy-doc.yaml"
 
 _TIMED = False
 
@@ -95,18 +95,18 @@ def banner() -> None:
 
     lines = [
         f"\033[90m  ╔{'═' * W}╗\033[0m",
-        row("authpolicy-transpiler  ·  end-to-end on Praxis + CPEX", "\033[1;96m"),
+        row("authpolicy-transpiler  ·  end-to-end on Praxis + the Policy Engine", "\033[1;96m"),
         row(),
         row("Proves the transpiled policy actually enforces: one command", "\033[90m"),
-        row("transpiles jwt-cel-http.yaml, runs the emitted CPEX policy on a", "\033[90m"),
+        row("transpiles jwt-cel-http.yaml, runs the emitted policy on a", "\033[90m"),
         row("real Praxis gateway against a local Keycloak, and checks the CEL", "\033[90m"),
         row("decisions with alice/bob persona tokens.", "\033[90m"),
         row(),
         row("`./run-demo.sh` does, in one shot:", "\033[97m"),
         row("  1. Start Keycloak (docker) + wait for OIDC discovery", "\033[90m"),
-        row("  2. Transpile the AuthPolicy → CPEX policy + Praxis filter", "\033[90m"),
+        row("  2. Transpile the AuthPolicy → policy doc + Praxis filter", "\033[90m"),
         row("  3. Inject a localhost-dev JWKS shim (never in prod)", "\033[90m"),
-        row("  4. Resolve the Praxis binary (cpex-policy-engine)", "\033[90m"),
+        row("  4. Resolve the Praxis binary (policy-engine)", "\033[90m"),
         row("  5. Start the echo backend + the gateway", "\033[90m"),
         row("  6. Mint alice/bob tokens + exercise the CEL policy", "\033[90m"),
         f"\033[90m  ╚{'═' * W}╝\033[0m",
@@ -155,7 +155,7 @@ def run_demo_acts() -> None:
     _run("./e2e/run-demo.sh")
     pause(8.0)
 
-    section("3. The deployed output: the CPEX policy Praxis actually loaded")
+    section("3. The deployed output: the policy Praxis actually loaded")
     _type("\033[90m  identity/jwt plugin + require(authenticated) gate + one "
           "cel: step per rule.\033[0m\n"
           "\033[90m  (insecure_http on the JWKS URL is the localhost-dev shim "
@@ -292,7 +292,7 @@ def verify() -> bool:
         ("gateway listening", "act 2: gateway started"),
         ("minted alice", "act 2: tokens minted"),
         ("All CEL policy checks passed", "act 2: all 5 checks passed"),
-        ("kind: identity/jwt", "act 3: deployed CPEX policy shown"),
+        ("kind: identity/jwt", "act 3: deployed policy shown"),
         ("insecure_http: true", "act 3: JWKS shim visible in output"),
         ("CEL deny", "act 4: results matrix rendered"),
     ]

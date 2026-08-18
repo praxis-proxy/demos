@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Resolve (and build, if needed) the praxis-cpex gateway binary the demo
+# Resolve (and build, if needed) the Praxis gateway binary the demo
 # runs on :8090, then print its path to stdout.
 #
 # Praxis is NOT vendored in this repo — it's a separate workspace. This
@@ -40,8 +40,8 @@ build_in() {
   # Build praxis with the policy engine feature in $1 and echo the binary path.
   local dir="$1"
   [ -f "$dir/Cargo.toml" ] || die "no Cargo.toml in $dir — not a praxis checkout"
-  log "cargo build --release --features cpex-policy-engine -p praxis-proxy  (in $dir)"
-  ( cd "$dir" && cargo build --release --features cpex-policy-engine -p praxis-proxy >&2 )
+  log "cargo build --release --features policy-engine -p praxis-proxy  (in $dir)"
+  ( cd "$dir" && cargo build --release --features policy-engine -p praxis-proxy >&2 )
   local bin="$dir/$REL_BIN"
   [ -x "$bin" ] || die "expected binary not found at $bin"
   log "built $bin"

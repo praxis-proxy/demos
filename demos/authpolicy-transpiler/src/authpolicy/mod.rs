@@ -2,7 +2,7 @@
 // Copyright (c) 2024 Praxis Contributors
 
 //! Offline transpiler from Kuadrant `AuthPolicy` resources to Praxis
-//! policy-filter configuration + a CPEX policy document.
+//! policy-filter configuration + a policy document.
 //!
 //! This is the Phase A (mapping-feasibility) surface of the `AuthPolicy`
 //! support spike: it parses the supported subset of `AuthPolicy`

@@ -2,25 +2,25 @@
 // Copyright (c) 2024 Praxis Contributors
 
 //! Thin serializable mirrors of the transpiler's two emission targets: a
-//! CPEX policy document and a Praxis `policy`-filter block.
+//! policy document and a Praxis `policy`-filter block.
 //!
-//! These are purpose-built shapes rather than a CPEX config struct: the APL
-//! authorization steps a policy carries are read out-of-band by CPEX's
-//! apl-cpex visitor and are not fields on its route entry, so a faithful
+//! These are purpose-built shapes rather than the engine's own config struct:
+//! the APL authorization steps a policy carries are read out-of-band by the
+//! engine's APL visitor and are not fields on its route entry, so a faithful
 //! emission needs its own shape. Output is checked by the golden corpus and
 //! the structural invariant assertions in `main.rs`; this demo does not
-//! depend on the CPEX crate.
+//! depend on the engine's crate.
 
 use serde::Serialize;
 
 // ---------------------------------------------------------------------------
-// CPEX policy document
+// Policy document
 // ---------------------------------------------------------------------------
 
-/// A CPEX policy document (the file a `policy` filter's `config_path`
+/// A policy document (the file a `policy` filter's `config_path`
 /// points at).
 #[derive(Debug, Serialize)]
-pub(crate) struct CpexDoc {
+pub(crate) struct PolicyDoc {
     pub plugin_settings: PluginSettings,
     pub plugins: Vec<PluginEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -32,7 +32,7 @@ pub(crate) struct PluginSettings {
     pub routing_enabled: bool,
 }
 
-/// One CPEX plugin entry. Only `identity/jwt` is emitted this iteration.
+/// One engine plugin entry. Only `identity/jwt` is emitted this iteration.
 #[derive(Debug, Serialize)]
 pub(crate) struct PluginEntry {
     pub name: String,
@@ -65,7 +65,7 @@ pub(crate) struct TrustedIssuer {
     pub decoding_key: DecodingKey,
 }
 
-/// Subset of `cpex` `DecodingKeySource` we emit (tagged by `kind`).
+/// Subset of the engine's `DecodingKeySource` we emit (tagged by `kind`).
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum DecodingKey {
@@ -73,10 +73,10 @@ pub(crate) enum DecodingKey {
     Secret { secret: String },
 }
 
-/// The CPEX `global` catch-all policy — where a generic-HTTP (non-MCP)
+/// The engine's `global` catch-all policy — where a generic-HTTP (non-MCP)
 /// authorization policy belongs. Emitted in the **canonical block form**
 /// (`authentication:` + `authorization:` directly under `global:`, no `apl:`
-/// wrapper). CPEX evaluates this policy for entity-less HTTP requests via the
+/// wrapper). The engine evaluates this policy for entity-less HTTP requests via the
 /// `cmf.http_request` hook.
 #[derive(Debug, Serialize)]
 pub(crate) struct GlobalOut {
@@ -111,7 +111,7 @@ impl PdpEntry {
 }
 
 /// The canonical `authorization:` block. `pre_invocation` is the renamed
-/// form of the legacy `policy:` step list (which CPEX now rejects).
+/// form of the legacy `policy:` step list (which the engine now rejects).
 #[derive(Debug, Serialize)]
 pub(crate) struct AuthorizationOut {
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -119,7 +119,7 @@ pub(crate) struct AuthorizationOut {
 }
 
 /// One `pre_invocation` step. Kuadrant predicates are CEL, so they are
-/// emitted as `cel: { expr }` PDP steps (dispatched to CPEX's bundled `cel`
+/// emitted as `cel: { expr }` PDP steps (dispatched to the engine's bundled `cel`
 /// resolver, which evaluates full CEL: `startsWith`, `&&`/`||`, literal
 /// `in`, …). The APL-native `require(...)` form is reserved for the two
 /// things that are genuinely native attribute predicates — the
