@@ -34,6 +34,7 @@ runtime assertions. Each demo requires a local
 | [grid-workload-inference](demos/grid-workload-inference/) | Cluster-local workload entry without public ingress |
 | [grid-llmd-pool-metrics](demos/grid-llmd-pool-metrics/) | EPP telemetry, Grid scoring, A-to-B-to-A capacity failover |
 | [grid-combined-site](demos/grid-combined-site/) | Consumer and secured provider roles colocated at each site |
+| [grid-provider-traffic](demos/grid-provider-traffic/) | Grid-programmed provider groups and Praxis-local round-robin distribution without inference metrics |
 
 ## Grid Labs and Guides
 

@@ -19,6 +19,7 @@ Environment:
 Image overrides (optional):
   GRID_XTASK_GATEWAY_IMAGE
   GRID_XTASK_OPERATOR_IMAGE
+  GRID_XTASK_OVERLAY_SYNC_IMAGE
   GRID_XTASK_VCR_IMAGE
   GRID_XTASK_IMAGE_PULL_POLICY
 EOF
@@ -60,6 +61,7 @@ case "${DEMO_NAME}" in
     grid-glb-demo)           SUBCOMMAND="run-grid-glb-demo" ;;
     grid-llmd-pool-metrics)  SUBCOMMAND="run-grid-llmd-pool-metrics-demo" ;;
     grid-combined-site)      SUBCOMMAND="run-grid-combined-site-demo" ;;
+    grid-provider-traffic)   SUBCOMMAND="run-grid-provider-traffic-demo" ;;
     *)
         echo "error: unknown demo '${DEMO_NAME}'" >&2
         exit 1
