@@ -1,7 +1,7 @@
 # Praxis demos
 
 Runnable, self-contained demos and setups for [Praxis](https://github.com/praxis-proxy/praxis).
-Each demo lives under `demos/<name>/` with its own README and bring-up script.
+Each demo lives under `demos/<name>/` with its own README.
 
 ## Demos
 
@@ -58,5 +58,3 @@ demos/
     README.md        # what it shows and how to run it
     ...              # configs, scripts, and any services
 ```
-
-Each demo is independent. Start from its README.
