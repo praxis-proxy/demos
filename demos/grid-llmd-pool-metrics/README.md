@@ -190,7 +190,7 @@ These are the defaults used by `run.sh`; no preloaded local image is required.
 ```bash
 export GRID_XTASK_GATEWAY_IMAGE=ghcr.io/praxis-proxy/grid-ai-rollup:v0.1.3
 export GRID_XTASK_OPERATOR_IMAGE=ghcr.io/praxis-proxy/grid-operator:v0.1.3
-export GRID_XTASK_EPP_IMAGE=ghcr.io/llm-d/llm-d-inference-scheduler:v0.8.0
+export GRID_XTASK_EPP_IMAGE=ghcr.io/llm-d/llm-d-router-endpoint-picker:v0.9.0
 export GRID_XTASK_VCR_IMAGE=ghcr.io/neuralmagic/vllm-vcr:vllm0.23
 export GRID_XTASK_OVERLAY_SYNC_IMAGE=ghcr.io/praxis-proxy/grid-overlay-sync:v0.1.3
 export GRID_XTASK_IMAGE_PULL_POLICY=IfNotPresent

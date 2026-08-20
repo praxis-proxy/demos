@@ -19,6 +19,7 @@ Environment:
 Image overrides (optional):
   GRID_XTASK_GATEWAY_IMAGE
   GRID_XTASK_OPERATOR_IMAGE
+  GRID_XTASK_EPP_IMAGE
   GRID_XTASK_VCR_IMAGE
   GRID_XTASK_IMAGE_PULL_POLICY
 EOF
@@ -35,6 +36,7 @@ DEMO_NAME="$(basename "${DEMO_DIR}")"
 # available by setting these variables explicitly and using pull policy Never.
 export GRID_XTASK_GATEWAY_IMAGE="${GRID_XTASK_GATEWAY_IMAGE:-ghcr.io/praxis-proxy/grid-ai-rollup:v0.1.3}"
 export GRID_XTASK_OPERATOR_IMAGE="${GRID_XTASK_OPERATOR_IMAGE:-ghcr.io/praxis-proxy/grid-operator:v0.1.3}"
+export GRID_XTASK_EPP_IMAGE="${GRID_XTASK_EPP_IMAGE:-ghcr.io/llm-d/llm-d-router-endpoint-picker:v0.9.0}"
 export GRID_XTASK_OVERLAY_SYNC_IMAGE="${GRID_XTASK_OVERLAY_SYNC_IMAGE:-ghcr.io/praxis-proxy/grid-overlay-sync:v0.1.3}"
 export GRID_XTASK_VCR_IMAGE="${GRID_XTASK_VCR_IMAGE:-ghcr.io/neuralmagic/vllm-vcr:vllm0.23}"
 export GRID_XTASK_IMAGE_PULL_POLICY="${GRID_XTASK_IMAGE_PULL_POLICY:-IfNotPresent}"
