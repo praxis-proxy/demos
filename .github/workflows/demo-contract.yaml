@@ -1,0 +1,50 @@
+name: demo-contract
+
+# Guards the cross-repo contract that praxis-proxy/grid depends on: grid's
+# triggered-integration-test.yaml checks out demos@main and runs
+# demos/grid-glb-demo/run.sh (which execs scripts/run-grid-demo.sh). A syntax
+# error in those scripts, or a missing forge.yaml, silently breaks grid's e2e
+# and only surfaces in grid's CI. This hermetic gate catches it at demos PR time
+# (no cluster, no clone, no external downloads).
+
+on:
+  pull_request:
+    paths:
+      - scripts/**
+      - demos/grid-glb-demo/**
+      - demos/grid-llmd-pool-metrics/**
+      - demos/grid-combined-site/**
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: demo-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  grid-forge-contract:
+    name: grid forge.yaml contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Assert grid demos stay runnable
+        run: |
+          for f in scripts/run-grid-demo.sh \
+                   demos/grid-glb-demo/run.sh \
+                   demos/grid-llmd-pool-metrics/run.sh \
+                   demos/grid-combined-site/run.sh; do
+            bash -n "$f"
+          done
+          for d in grid-glb-demo grid-llmd-pool-metrics grid-combined-site; do
+            test -f "demos/${d}/forge.yaml" \
+              || { echo "::error::missing demos/${d}/forge.yaml (breaks grid e2e)"; exit 1; }
+          done
