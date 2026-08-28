@@ -68,3 +68,7 @@ already-compressed formats like MP4.
 Instead, upload media as GitHub artifacts (e.g. drag files into markdown editor
 on the web, or use a release asset, or a workflow artifact) and link them from
 the relevant documentation.
+
+## License
+
+Apache 2.0
