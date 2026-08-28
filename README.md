@@ -58,3 +58,13 @@ demos/
     README.md        # what it shows and how to run it
     ...              # configs, scripts, and any services
 ```
+
+## Media and Large Files
+
+Do not commit videos or other large binary media to this repository. They bloat
+the git history for everyone who clones or fetches, and git cannot compress
+already-compressed formats like MP4.
+
+Instead, upload media as GitHub artifacts (e.g. drag files into markdown editor
+on the web, or use a release asset, or a workflow artifact) and link them from
+the relevant documentation.
