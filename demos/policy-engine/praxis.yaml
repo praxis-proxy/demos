@@ -20,6 +20,10 @@ filter_chains:
 
       - filter: policy
         config_path: ./policy.yaml
+        # Keycloak runs on localhost here. The engine refuses loopback and
+        # private IdP addresses by default, since a jwks_url in a policy
+        # document is an SSRF primitive when anyone but the operator can set it.
+        allow_private_idp: true
         body_access: read_write
 
       - filter: router
