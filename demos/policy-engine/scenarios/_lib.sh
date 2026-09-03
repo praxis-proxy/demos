@@ -49,7 +49,13 @@ _post_tool() {
   # elicitation instead of dispatching a fresh one. Add ELICITATION_PEEK
   # to only report status (-32121 once approved) WITHOUT running the tool
   # — used to detect approval before committing. See scenario 11.
+  #
+  # Spoof an asserted header when SPOOF_HEADER is set: the client claims a
+  # header the `assertions:` contract also targets. An entry removes its target
+  # before injecting, so the upstream must see the engine's value and never
+  # this one. Used by scenario 12.
   local extra=()
+  [ -n "${SPOOF_HEADER:-}" ] && extra+=(-H "$SPOOF_HEADER")
   [ -n "${SESSION_ID:-}" ] && extra+=(-H "X-Session-Id: $SESSION_ID")
   [ -n "${ELICITATION_ID:-}" ] && extra+=(-H "X-Policy-Elicitation-Id: $ELICITATION_ID")
   [ -n "${ELICITATION_PEEK:-}" ] && extra+=(-H "X-Policy-Elicitation-Peek: true")

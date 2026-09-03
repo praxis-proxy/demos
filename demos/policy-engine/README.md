@@ -217,7 +217,7 @@ deliberately, and re-run the scenarios when you do.
 
 ## Scenarios
 
-Eleven scenarios cover every feature in the filter. Run any one directly, for
+Twelve scenarios cover every feature in the filter. Run any one directly, for
 example `./scenarios/01-bob-allow.sh`.
 
 | # | Scenario | Demonstrates |
@@ -233,6 +233,7 @@ example `./scenarios/01-bob-allow.sh`.
 | 09 | Eve taints a session id, Bob reuses the same id | Cross-principal isolation: Bob's reuse is a different bucket and is allowed |
 | 10 | Bob adjusts compensation by ≤ $10k | Below the threshold: `adjust_compensation` applies immediately, no approval |
 | 11 | Bob adjusts compensation by > $10k | Human-in-the-loop: the gateway suspends with `-32120`, Alice approves out-of-band (CIBA), then it applies |
+| 12 | Bob calls `get_compensation`, then again spoofing an asserted header | `assertions:` renders identity into upstream headers, strips his raw token, and refuses to forward a header he set himself |
 
 Scenarios 10 and 11 exercise the human-in-the-loop flow described in
 [Human-in-the-loop: manager approval](#human-in-the-loop-manager-approval)
@@ -273,6 +274,73 @@ Both PDP backends are compiled into the same binary. The config's
 `pdp: { kind: ... }` and the route's `cedar:` or `cel:` step select which one
 runs. The CEL step also shows an `on_deny:` reaction attaching a human reason and
 a stable violation code; `on_deny` and `on_allow` work on any PDP step.
+
+## Assertions: what the upstream is told
+
+Every other scenario shows the gateway *deciding*. This is the only channel that
+carries a decision onward. `global.assertions.request:` renders engine-derived
+identity into request headers `hr-mcp` can read:
+
+```yaml
+global:
+  assertions:
+    request:
+      headers:
+        - name: x-auth-user-id
+          from: subject.id
+          on_missing: deny
+        - name: x-auth-roles
+          from: subject.roles
+          encode: csv          # required: the source is a collection
+        - name: x-auth-context
+          members:
+            manager: claim.manager
+            teams: subject.teams
+      strip:
+        - x-user-token
+```
+
+What `hr-mcp` logs for Bob:
+
+```text
+x-auth-user-id   = b7d0f735-fe71-429b-887d-965b9cf36a44
+x-auth-username  = bob
+x-auth-roles     = hr
+x-auth-context   = {"manager":"alice","teams":["hr"]}
+```
+
+and no `x-user-token`: the contract strips it, and `delegate(...)` already
+replaced `authorization` with the minted workday-api token, so the upstream holds
+no credential Bob issued.
+
+**The trust model, first, because it is the whole story.** These headers are
+**unsigned**. `hr-mcp` believes `x-auth-user-id` because it believes nothing
+between the gateway and itself can set that header. If that is not true of your
+network, this feature is not what makes it true.
+
+That is also why removal is unconditional. Every header an entry targets is
+removed before injection, whether or not the source resolved to anything — so an
+absent claim can never leave the client's own value standing under a name the
+upstream reads as the gateway's. Scenario 12 shows it: Bob sends
+`x-auth-user-id: root` and the upstream still sees his real subject id.
+
+Sources are engine-derived only. The inbound bearer tokens and the client's own
+request headers are refused as sources in code, with no config surface to widen
+them, because rendering a client-supplied header into one the upstream trusts is
+exactly the laundering this prevents.
+
+A collection must declare an `encode:`, since a set arriving in a shape nobody
+chose is a shape nobody can rely on. Collections render sorted and a `members:`
+object's keys are sorted, so one identity produces identical header bytes every
+request and audit hashes stay stable.
+
+`strip:` cannot remove a **protocol floor** header — `host`, `content-type`,
+`content-length`, `transfer-encoding` on the way in — and a config that tries
+fails to load rather than breaking traffic. `authorization` is deliberately not in
+that floor, which is what makes the `x-user-token` line above expressible.
+
+`docs/assertions.md` in the policy engine repo is the full reference, including
+the response direction and the four levels a contract can be written at.
 
 ## Session taint
 
@@ -491,7 +559,7 @@ the padding, so the wire stays correct. This is documented in the filter source.
 | `keycloak/realm-export.json` | Realm with users, clients, STE v2, and CIBA + the channel SPI |
 | `hr-mcp-server/` | Python mock MCP server (Dockerfile and `server.py`), incl. `adjust_compensation` |
 | `auth-channel/` | CIBA approval UI (`:5001`, "the manager's phone") for Approve / Deny; dev `/pending` + `/approve` API for scripted approval |
-| `scenarios/*.sh` | The eleven scenarios (08/09 session taint, 10/11 manager approval) and `_lib.sh` helpers |
+| `scenarios/*.sh` | The twelve scenarios (08/09 session taint, 10/11 manager approval, 12 assertions) and `_lib.sh` helpers |
 | `mint-token.sh` | Mint a user or client token via Keycloak |
 | `verify-token-exchange.sh` | Check that STE v2 is configured correctly |
 | `walkthrough.sh` | Narrated tour of the core scenarios |

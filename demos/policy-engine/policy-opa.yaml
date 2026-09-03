@@ -219,6 +219,61 @@ global:
     - jwt-client
 
   # ----------------------------------------------------------------
+  # Assertions — what the engine puts on the wire.
+  # ----------------------------------------------------------------
+  # Everything above this block decides. This is the only thing that tells the
+  # upstream what was decided, as request headers it can read.
+  #
+  # The trust model first, because it is the whole story: what crosses here is
+  # UNSIGNED. hr-mcp believes `x-auth-user-id` because it believes nothing
+  # between this gateway and itself can set that header. If that is not true of
+  # your network, this feature is not what makes it true.
+  #
+  # Sources are engine-derived only. A raw inbound token and the client's own
+  # request headers are refused as sources, in code, with no config surface to
+  # widen: rendering a client-supplied header into one the upstream trusts is
+  # the laundering this exists to prevent. Scenario 12 demonstrates that.
+  assertions:
+    request:
+      headers:
+        # The stable subject identifier the JWT resolved to (`sub`).
+        # `on_missing: deny` because every route here authenticates, so an
+        # absent subject is a bug rather than an anonymous request to pass on.
+        - name: x-auth-user-id
+          from: subject.id
+          on_missing: deny
+
+        # The human-readable name, for the demo log. A claim, not a slot.
+        - name: x-auth-username
+          from: claim.preferred_username
+
+        # A collection MUST declare an encoding: a set reaching an upstream in
+        # a shape nobody chose is a shape nobody can rely on. Rendered sorted,
+        # so one identity produces identical header bytes every request.
+        - name: x-auth-roles
+          from: subject.roles
+          encode: csv
+
+        # `members:` renders one JSON object with operator-chosen keys, for
+        # everything that would otherwise be a header each.
+        - name: x-auth-context
+          members:
+            manager: claim.manager
+            teams: subject.teams
+
+      # `strip:` removes names no entry above targets. The user's raw JWT is
+      # one: `delegate(...)` already replaces `authorization` with the minted
+      # workday-api token, and this withholds the second copy, so the upstream
+      # ends up holding no credential the user issued.
+      #
+      # `authorization` is deliberately absent from the request protocol floor
+      # precisely so this is expressible. A floor header (`host`,
+      # `content-type`, `content-length`, `transfer-encoding`) fails the load
+      # rather than breaking traffic.
+      strip:
+        - x-user-token
+
+  # ----------------------------------------------------------------
   # OPA PDP: Rego modules evaluated in-process by regorus. No sidecar
   # and no network hop, so the decision stays on the request path.
   #
