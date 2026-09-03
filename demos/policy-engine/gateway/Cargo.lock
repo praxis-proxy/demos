@@ -3114,6 +3114,7 @@ dependencies = [
  "praxis-policy-session-valkey",
  "rustls",
  "tokio",
+ "tower-service",
  "webpki-roots",
 ]
 
