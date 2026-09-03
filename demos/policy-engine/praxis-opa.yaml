@@ -33,3 +33,10 @@ filter_chains:
             endpoints:
               # Host-bound port of the docker-compose `hr-mcp` service.
               - "127.0.0.1:9100"
+
+# The demo's backends are all on localhost: the mock HR MCP server on :9100,
+# Keycloak on :8081, Valkey on :6379. Praxis refuses a private or loopback
+# endpoint unless a config says so out loud, which is the right default for a
+# proxy and an explicit opt-in for a demo that runs entirely on one machine.
+insecure_options:
+  allow_private_endpoints: true # demo proxies to local backends
