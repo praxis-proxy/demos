@@ -12,14 +12,23 @@ name = "policy-engine-gateway"
 path = "src/main.rs"
 
 [dependencies]
-praxis-ai-proxy = { git = "https://github.com/praxis-proxy/ai", rev = "333f93d5e3aef60a86897412da617012fc20267e", features = ["praxis-main"] }
+praxis-ai-proxy = { git = "https://github.com/praxis-proxy/ai", rev = "6054d7ef71dc0b02cd32fdd0b62e415fceddfd2c", features = ["praxis-main"] }
 # Declared only to turn on `policy-engine` graph-wide.
 praxis-proxy-filter = { version = "0.5", features = ["policy-engine"] }
+# Likewise for `admin-api`. praxis-ai's server calls the admin-endpoint helpers
+# unconditionally, praxis gates them behind this feature, and praxis-ai declares
+# its praxis dependencies with no features at all. Without this the build fails
+# on `add_admin_endpoints_to_pingora_server` not being found.
+praxis-proxy-protocol = { version = "0.5", features = ["admin-api"] }
 
 # Unpublished reference plugins the demo registers itself, in main.rs. This is
 # the worked example of extending the engine with a plugin it does not bundle.
-praxis-policy-plugin-pii-scanner = { git = "https://github.com/praxis-proxy/policy", tag = "v0.1.0" }
-praxis-policy-plugin-audit-logger = { git = "https://github.com/praxis-proxy/policy", tag = "v0.1.0" }
+#
+# Read from the local checkout, like everything else below: they are workspace
+# members there, so they resolve praxis-policy-core by path and land on the same
+# copy the rest of the graph does. Two copies would be two PluginFactory traits.
+praxis-policy-plugin-pii-scanner = { path = ".policy/reference/plugins/pii-scanner" }
+praxis-policy-plugin-audit-logger = { path = ".policy/reference/plugins/audit-logger" }
 
 clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
@@ -34,10 +43,28 @@ praxis-proxy-core = { path = ".praxis/core" }
 praxis-proxy-filter = { path = ".praxis/filter" }
 praxis-proxy-protocol = { path = ".praxis/protocol" }
 praxis-proxy-tls = { path = ".praxis/tls" }
-# The plugins above resolve `praxis-policy-core` from the git checkout, while
-# praxis resolves it from crates.io. Two copies means two `PluginFactory`
-# traits and registration stops typechecking, so pin both to the git one.
-praxis-policy-core = { git = "https://github.com/praxis-proxy/policy", tag = "v0.1.0" }
+# The policy engine, 0.1.1 and unreleased. Every crate in that workspace, not
+# only the facade: praxis depends on the facade and the facade on the rest, so
+# leaving any of them unpatched resolves that one from crates.io at 0.1.0 and the
+# graph ends up with two copies of it. For `praxis-policy-core` specifically that
+# means two `PluginFactory` traits, at which point the host registration in
+# main.rs stops typechecking.
+#
+# praxis patches these too, in its own manifest. That section is inert here,
+# because cargo honours `[patch]` only in the workspace root it is building.
+praxis-policy = { path = ".policy/crates/ppe" }
+praxis-policy-core = { path = ".policy/crates/ppe-core" }
+praxis-policy-orchestration = { path = ".policy/crates/ppe-orchestration" }
+praxis-policy-apl-core = { path = ".policy/crates/ppe-apl-core" }
+praxis-policy-apl-cmf = { path = ".policy/crates/ppe-apl-cmf" }
+praxis-policy-apl-runtime = { path = ".policy/crates/ppe-apl-runtime" }
+praxis-policy-plugin-identity-jwt = { path = ".policy/builtins/plugins/identity-jwt" }
+praxis-policy-plugin-delegator-oauth = { path = ".policy/builtins/plugins/delegator-oauth" }
+praxis-policy-plugin-elicitation-ciba = { path = ".policy/builtins/plugins/elicitation-ciba" }
+praxis-policy-pdp-cedar-direct = { path = ".policy/builtins/pdps/cedar-direct" }
+praxis-policy-pdp-cel = { path = ".policy/builtins/pdps/cel" }
+praxis-policy-pdp-opa = { path = ".policy/builtins/pdps/opa" }
+praxis-policy-session-valkey = { path = ".policy/builtins/session/valkey" }
 
 # praxis-ai pins praxis-proxy-* by git tag, which `[patch.crates-io]` cannot
 # redirect. Without this the AI server registers from the tagged filter, which
