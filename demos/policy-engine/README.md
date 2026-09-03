@@ -163,15 +163,31 @@ praxis-ai's server and enables the `policy-engine` feature, which registers
 `policy`. Both filters register themselves, so there is no manual wiring.
 
 `gateway/Cargo.toml` also `[patch]`es `praxis-proxy-*` to a praxis checkout in the
-gitignored `gateway/.praxis`. That is not a fork: no *published* praxis version
-carries the `policy-engine` feature yet, so the demo builds praxis from source.
-`build-gateway.sh` resolves that checkout, first match wins:
+gitignored `gateway/.praxis`, and the policy engine's crates to a second checkout
+in `gateway/.policy`. Neither is a fork: no *published* praxis version carries the
+`policy-engine` feature, and the engine release it is built against is unreleased
+too, so the demo builds both from source.
+
+The engine needs its own `[patch]` entries here rather than inheriting praxis's,
+because cargo honours `[patch]` only in the workspace root it is building. Every
+engine crate is listed, not just the facade: leaving one out resolves that crate
+from crates.io and the graph ends up with two copies of it, which for
+`praxis-policy-core` means two `PluginFactory` traits and the host registration in
+`main.rs` stops compiling.
+
+`build-gateway.sh` resolves both, first match wins:
 
 | Source | Effect |
 |---|---|
 | `PRAXIS_DIR=<path>` | Symlinks a local praxis checkout as `gateway/.praxis`. |
 | an existing `gateway/.praxis` | Reused as-is, never fetched into. |
 | default | Clones `PRAXIS_GIT_URL` (upstream praxis) at `PRAXIS_GIT_REF`, which defaults to a **pinned commit**, not a branch. |
+
+`gateway/.policy` is derived rather than asked for: praxis reads the engine as
+`../praxis-policy`, so pointing `.praxis` at a checkout already says where the
+engine is and `.policy` follows the same relative path. `PPE_DIR` overrides it,
+and a clone of `PPE_GIT_URL` at `PPE_GIT_REF` is the fallback when there is no
+sibling to find.
 
 ```bash
 # Nothing to set — clones upstream praxis at the pinned commit:
@@ -187,9 +203,11 @@ PRAXIS_GIT_REF=v0.6.0 ./restart.sh
 # GATEWAY_PROFILE=debug for a faster build; GATEWAY_BIN=<path> to skip building.
 ```
 
-Both upstreams are pinned so a demo run is reproducible: praxis to the commit in
-`build-gateway.sh`'s `DEFAULT_PRAXIS_REF`, and praxis-ai to the `rev` in
-`gateway/Cargo.toml`. Building praxis from a moving branch meant the demo could
+All three upstreams are pinned so a demo run is reproducible: praxis to the commit
+in `build-gateway.sh`'s `DEFAULT_PRAXIS_REF`, the engine to `DEFAULT_PPE_REF`
+beside it, and praxis-ai to the `rev` in `gateway/Cargo.toml`. praxis and the
+engine are one change split across two repos, so bump that pair together: a
+mismatched pair fails to compile rather than misbehaving quietly. Building praxis from a moving branch meant the demo could
 break with nothing here changing, which is exactly what happened when praxis
 changed an admin-endpoint signature under the pinned praxis-ai. Bump either pin
 deliberately, and re-run the scenarios when you do.
@@ -466,7 +484,7 @@ the padding, so the wire stays correct. This is documented in the filter source.
 | `praxis.yaml` | Praxis listener and filter chain (`mcp` -> `policy` -> `router` -> `load_balancer`); loads `policy.yaml` |
 | `policy.yaml` | Policy document: plugins, routes, Cedar PDP policy text |
 | `praxis-cel.yaml` | Same listener as `praxis.yaml`, loads `policy-cel.yaml`. Run via `GATEWAY_CONFIG=praxis-cel.yaml` |
-| `policy-cel.yaml` | CEL variant: `search_repos` uses an inline `cel:` expression, no `apl:` wrapper |
+| `policy-cel.yaml` | CEL variant: `search_repos` uses an inline `cel:` expression |
 | `praxis-opa.yaml` | Same listener as `praxis.yaml`, loads `policy-opa.yaml`. Run via `GATEWAY_CONFIG=praxis-opa.yaml` |
 | `policy-opa.yaml` | OPA variant: a Rego module under `pdp:`, queried by `search_repos` with `opa: { query }` |
 | `docker-compose.yml` | Keycloak (8081), hr-mcp (9100), valkey (6379), and auth-channel (5001) |
