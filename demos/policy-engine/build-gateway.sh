@@ -18,10 +18,9 @@
 #   otherwise                           clone PRAXIS_GIT_URL @ PRAXIS_GIT_REF,
 #                                       defaulting to the pinned commit below
 #
-# The policy engine needs a checkout too, at `gateway/.policy`, because 0.1.1 is
-# unreleased and cargo honours `[patch]` only in the workspace root it is
-# building: praxis patching the engine to a sibling path does nothing from here,
-# so the gateway names those crates itself (see gateway/Cargo.toml).
+# The policy engine itself comes from crates.io. A checkout is still needed at
+# `gateway/.policy` for the two reference plugins, which are unpublished, and for
+# the two engine crates they reach by path (see gateway/Cargo.toml).
 #
 # It is not a second thing to point at, though. praxis reads the engine as
 # `../praxis-policy`, so once .praxis is resolved the engine is its sibling and
@@ -40,10 +39,10 @@ set -euo pipefail
 # Policy Engine. Verified with this demo end to end. Bump deliberately.
 DEFAULT_PRAXIS_REF="c9c2a46898ebd47f58cffde5865f9e976078fa6e"
 
-# The engine revision that praxis ref was ported onto. Bump the two together:
-# praxis 0.1.1 and engine 0.1.1 are one change split across two repos, and a
-# mismatched pair fails to compile rather than misbehaving quietly.
-DEFAULT_PPE_REF="main"
+# The engine release the gateway resolves from crates.io. The checkout supplies
+# the reference plugins, so keep it on the tag matching that release: a branch
+# would link its `praxis-policy-core` against the published rest of the engine.
+DEFAULT_PPE_REF="v0.2.0"
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/gateway"
 PRAXIS_LINK="$DIR/.praxis"

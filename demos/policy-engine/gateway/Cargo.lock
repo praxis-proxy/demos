@@ -3093,7 +3093,9 @@ dependencies = [
 
 [[package]]
 name = "praxis-policy"
-version = "0.1.0"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "843b4d6fc1ded47c045d25c5b79aff66fb8a8d7204210f090ba6671b136dd9e6"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3120,7 +3122,9 @@ dependencies = [
 
 [[package]]
 name = "praxis-policy-apl-cmf"
-version = "0.1.0"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a34d8a61d7a4d3510beaede620503ee9f6c50e0b6a84d258c00354ab2051da48"
 dependencies = [
  "praxis-policy-apl-core",
  "praxis-policy-core",
@@ -3129,7 +3133,9 @@ dependencies = [
 
 [[package]]
 name = "praxis-policy-apl-core"
-version = "0.1.0"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a3e34c6a6b9a8a630d2deee0efb7a101de523528c20690b269e345c5ac17d881"
 dependencies = [
  "async-trait",
  "futures",
@@ -3143,7 +3149,9 @@ dependencies = [
 
 [[package]]
 name = "praxis-policy-apl-runtime"
-version = "0.1.0"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8421cb367d591771bdc4e1ce38aae910d788facb5d9189de24401a17288d1543"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3160,7 +3168,7 @@ dependencies = [
 
 [[package]]
 name = "praxis-policy-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -3183,7 +3191,7 @@ dependencies = [
 
 [[package]]
 name = "praxis-policy-orchestration"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "futures",
  "tokio",
@@ -3191,7 +3199,9 @@ dependencies = [
 
 [[package]]
 name = "praxis-policy-pdp-cedar-direct"
-version = "0.1.0"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f560616300bc3ba4b8d1cb43937a4fc9b7e608bf86596b06ae252374b13b14e0"
 dependencies = [
  "async-trait",
  "cedar-policy",
@@ -3204,7 +3214,9 @@ dependencies = [
 
 [[package]]
 name = "praxis-policy-pdp-cel"
-version = "0.1.0"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4823562424fe061a801a5c758ecb3ec6f2923d52ee55d25ed8a7328822c8b86e"
 dependencies = [
  "async-trait",
  "cel",
@@ -3216,7 +3228,9 @@ dependencies = [
 
 [[package]]
 name = "praxis-policy-pdp-opa"
-version = "0.1.0"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06ffd0a4e95f66ff2741e488d182c517cebc55425db1601064b82db25dd66e5a"
 dependencies = [
  "async-trait",
  "praxis-policy-apl-core",
@@ -3230,7 +3244,7 @@ dependencies = [
 
 [[package]]
 name = "praxis-policy-plugin-audit-logger"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3242,7 +3256,9 @@ dependencies = [
 
 [[package]]
 name = "praxis-policy-plugin-delegator-oauth"
-version = "0.1.0"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e26ca48ac8eefdf5ae847be7ff1edd21d481bf8ca22fb51de00b1a428635551"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -3261,7 +3277,9 @@ dependencies = [
 
 [[package]]
 name = "praxis-policy-plugin-elicitation-ciba"
-version = "0.1.0"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "193279a70d24dc95246b94fcc808fdf25b1c2ffa81d1aa074030951b901602a3"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -3275,7 +3293,9 @@ dependencies = [
 
 [[package]]
 name = "praxis-policy-plugin-identity-jwt"
-version = "0.1.0"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "931ff18bd767f37df756efb017ac184a76ebe2e50578b1b84d12c2cb28dd320d"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -3291,7 +3311,7 @@ dependencies = [
 
 [[package]]
 name = "praxis-policy-plugin-pii-scanner"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "praxis-policy-core",
@@ -3302,7 +3322,9 @@ dependencies = [
 
 [[package]]
 name = "praxis-policy-session-valkey"
-version = "0.1.0"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "28a3e18c9d0fad6e2b3dc549750d0ab8493e869a73029b3b545406775ee272cd"
 dependencies = [
  "async-trait",
  "deadpool-redis",
