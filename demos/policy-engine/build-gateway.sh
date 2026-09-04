@@ -37,6 +37,11 @@ set -euo pipefail
 
 # praxis main @ #943, the commit that moved the policy filter onto the Praxis
 # Policy Engine. Verified with this demo end to end. Bump deliberately.
+#
+# Stale on two counts until the PPE 0.2.0 port lands on praxis main: it predates
+# both that port and the move of the crates under `crates/`, which gateway's
+# `[patch]` paths now assume. Until then this demo needs `.praxis` pointing at a
+# checkout carrying the port, which is what PRAXIS_DIR and the symlink are for.
 DEFAULT_PRAXIS_REF="c9c2a46898ebd47f58cffde5865f9e976078fa6e"
 
 # The engine release the gateway resolves from crates.io. The checkout supplies

@@ -38,11 +38,14 @@ tikv-jemallocator = "0.7"
 
 # No published praxis carries `policy-engine`, so build it from the local
 # checkout `build-gateway.sh` populates at `.praxis/` (gitignored).
+#
+# The paths carry `crates/` because praxis moved core, filter, protocol, tls and
+# server under it. A checkout older than that move does not resolve here.
 [patch.crates-io]
-praxis-proxy-core = { path = ".praxis/core" }
-praxis-proxy-filter = { path = ".praxis/filter" }
-praxis-proxy-protocol = { path = ".praxis/protocol" }
-praxis-proxy-tls = { path = ".praxis/tls" }
+praxis-proxy-core = { path = ".praxis/crates/core" }
+praxis-proxy-filter = { path = ".praxis/crates/filter" }
+praxis-proxy-protocol = { path = ".praxis/crates/protocol" }
+praxis-proxy-tls = { path = ".praxis/crates/tls" }
 
 # The engine comes from crates.io at 0.2.0, except these two. The reference
 # plugins above are `publish = false` and read the engine by path, so without
@@ -62,7 +65,7 @@ praxis-policy-orchestration = { path = ".policy/crates/ppe-orchestration" }
 # redirect. Without this the AI server registers from the tagged filter, which
 # has no `policy-engine`, and the `policy` filter silently never loads.
 [patch."https://github.com/praxis-proxy/praxis.git"]
-praxis-proxy-core = { path = ".praxis/core" }
-praxis-proxy-filter = { path = ".praxis/filter" }
-praxis-proxy-protocol = { path = ".praxis/protocol" }
-praxis-proxy-tls = { path = ".praxis/tls" }
+praxis-proxy-core = { path = ".praxis/crates/core" }
+praxis-proxy-filter = { path = ".praxis/crates/filter" }
+praxis-proxy-protocol = { path = ".praxis/crates/protocol" }
+praxis-proxy-tls = { path = ".praxis/crates/tls" }
