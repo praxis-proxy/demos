@@ -22,16 +22,19 @@
 # realm's JWKS URL so the resolver fetches the active public key at
 # init time (no manual PEM paste).
 
-plugin_settings:
-  routing_enabled: true
+engine_settings:
+  dispatch: policy
 
 plugins:
   # User identity. Carries the human's roles + permissions claims.
   - name: jwt-user
+    capabilities:
+      # PPE performs no outbound HTTP of its own, so a plugin that reaches an
+      # IdP declares this or the engine refuses to start.
+      - perform_http
     kind: identity/jwt
     hooks: [identity.resolve]
     mode: sequential
-    priority: 10
     on_error: fail
     config:
       role: user
@@ -49,10 +52,13 @@ plugins:
 
   # Client identity. Carries the agent's client_id / azp.
   - name: jwt-client
+    capabilities:
+      # PPE performs no outbound HTTP of its own, so a plugin that reaches an
+      # IdP declares this or the engine refuses to start.
+      - perform_http
     kind: identity/jwt
     hooks: [identity.resolve]
     mode: sequential
-    priority: 20
     on_error: fail
     config:
       role: client
@@ -78,9 +84,11 @@ plugins:
     kind: delegator/oauth
     hooks: [token.delegate]
     mode: sequential
-    priority: 30
     on_error: fail
     capabilities:
+      # PPE performs no outbound HTTP of its own, so a plugin that reaches an
+      # IdP declares this or the engine refuses to start.
+      - perform_http
       - read_inbound_credentials
       - write_delegated_tokens
     config:
@@ -108,7 +116,6 @@ plugins:
     kind: validator/pii-scan
     hooks: [cmf.tool_pre_invoke]
     mode: sequential
-    priority: 25
     on_error: fail
     config:
       detect:
@@ -121,17 +128,21 @@ plugins:
   # ----------------------------------------------------------------
   # Emits one JSON line per dispatched request capturing subject,
   # client, entity, tool args, and any delegation outcomes. Never
-  # blocks — observation only. Wired on every CMF entity hook so
-  # the audit trail covers all tool / prompt / resource traffic.
+  # blocks — observation only.
+  #
+  # One hook, because this demo declares only `tool:` routes. Under
+  # `dispatch: policy` a plugin runs where a `run(name)` step names it, so
+  # declaring the prompt and resource hooks too would leave two of the three
+  # uncovered and the load would say so. Add them back alongside the routes
+  # that need them.
   - name: audit-log
     kind: audit/logger
     hooks:
       - cmf.tool_pre_invoke
-      - cmf.prompt_pre_invoke
-      - cmf.resource_pre_fetch
     mode: sequential
-    priority: 90    # fires AFTER policy / delegate so the record
-                    # reflects the final decision + minted tokens
+    # Ordering is the order the document writes the steps: a `run(name)`
+    # step invokes the one plugin it names, so this records the final
+    # decision and the minted tokens by sitting last.
     on_error: ignore  # observation failures don't halt traffic
     capabilities:
       - read_subject
@@ -154,9 +165,11 @@ plugins:
     kind: delegator/oauth
     hooks: [token.delegate]
     mode: sequential
-    priority: 31
     on_error: fail
     capabilities:
+      # PPE performs no outbound HTTP of its own, so a plugin that reaches an
+      # IdP declares this or the engine refuses to start.
+      - perform_http
       - read_inbound_credentials
       - write_delegated_tokens
     config:
@@ -180,10 +193,13 @@ plugins:
   # tell the user "awaiting sign-off" and retry — it never blocks.
   # Registered under the name `manager-approver`; the route names it.
   - name: manager-approver
+    capabilities:
+      # PPE performs no outbound HTTP of its own, so a plugin that reaches an
+      # IdP declares this or the engine refuses to start.
+      - perform_http
     kind: elicitation/ciba
     hooks: [elicit]
     mode: sequential
-    priority: 40
     on_error: fail
     config:
       backchannel_endpoint: "http://localhost:8081/realms/policy-demo/protocol/openid-connect/ext/ciba/auth"
@@ -201,6 +217,61 @@ global:
   authentication:
     - jwt-user
     - jwt-client
+
+  # ----------------------------------------------------------------
+  # Assertions — what the engine puts on the wire.
+  # ----------------------------------------------------------------
+  # Everything above this block decides. This is the only thing that tells the
+  # upstream what was decided, as request headers it can read.
+  #
+  # The trust model first, because it is the whole story: what crosses here is
+  # UNSIGNED. hr-mcp believes `x-auth-user-id` because it believes nothing
+  # between this gateway and itself can set that header. If that is not true of
+  # your network, this feature is not what makes it true.
+  #
+  # Sources are engine-derived only. A raw inbound token and the client's own
+  # request headers are refused as sources, in code, with no config surface to
+  # widen: rendering a client-supplied header into one the upstream trusts is
+  # the laundering this exists to prevent. Scenario 12 demonstrates that.
+  assertions:
+    request:
+      headers:
+        # The stable subject identifier the JWT resolved to (`sub`).
+        # `on_missing: deny` because every route here authenticates, so an
+        # absent subject is a bug rather than an anonymous request to pass on.
+        - name: x-auth-user-id
+          from: subject.id
+          on_missing: deny
+
+        # The human-readable name, for the demo log. A claim, not a slot.
+        - name: x-auth-username
+          from: claim.preferred_username
+
+        # A collection MUST declare an encoding: a set reaching an upstream in
+        # a shape nobody chose is a shape nobody can rely on. Rendered sorted,
+        # so one identity produces identical header bytes every request.
+        - name: x-auth-roles
+          from: subject.roles
+          encode: csv
+
+        # `members:` renders one JSON object with operator-chosen keys, for
+        # everything that would otherwise be a header each.
+        - name: x-auth-context
+          members:
+            manager: claim.manager
+            teams: subject.teams
+
+      # `strip:` removes names no entry above targets. The user's raw JWT is
+      # one: `delegate(...)` already replaces `authorization` with the minted
+      # workday-api token, and this withholds the second copy, so the upstream
+      # ends up holding no credential the user issued.
+      #
+      # `authorization` is deliberately absent from the request protocol floor
+      # precisely so this is expressible. A floor header (`host`,
+      # `content-type`, `content-length`, `transfer-encoding`) fails the load
+      # rather than breaking traffic.
+      strip:
+        - x-user-token
 
   # ----------------------------------------------------------------
   # OPA PDP: Rego modules evaluated in-process by regorus. No sidecar
@@ -224,9 +295,8 @@ global:
   # tooling your org already runs. All three express the SAME decision
   # here on purpose.
   #
-  # NOTE: this config omits the `apl:` wrapper — APL terms (`pdp:` here,
-  # `policy:`/`args:`/`result:` on the routes below) sit directly on the
-  # section. Both forms are accepted; see policy.yaml for the wrapped style.
+  # `pdp:` is a `global:` key, and the only scope that accepts one: a PDP, the
+  # session store and the static attribute tree are all process-global.
   # ----------------------------------------------------------------
   pdp:
     - kind: opa
@@ -263,8 +333,7 @@ global:
   # on restart). Valkey runs as the `valkey` compose service; the
   # gateway reaches it on localhost:6379. See scenarios 08 / 09.
   #
-  # This is a flat APL key (like `pdp:` above): no `apl:` wrapper. See
-  # the NOTE above on the flat form.
+  # A `global:` key, like `pdp:` above and for the same reason.
   #
   # Optional keys (read by the valkey factory):
   #   key_prefix: "taint:v1"   # default key namespace
@@ -279,33 +348,36 @@ global:
 routes:
 
   - tool: get_compensation
-    pre_invocation:
-      - "require(role.hr)"
-      - "delegate(workday-oauth, target: workday-api, audience: workday-api, permissions: [read_compensation])"
-      - "taint(secret, session)"
-      - "run(audit-log)"
+    authorization:
+      pre_invocation:
+        - "require(role.hr)"
+        - "delegate(workday-oauth, target: workday-api, audience: workday-api, permissions: [read_compensation])"
+        - "taint(secret, session)"
+        - "run(audit-log)"
     args:
       ssn: "str | redact(!perm.view_ssn)"
     result:
       ssn: "str | redact(!perm.view_ssn)"
 
   - tool: search_repos
-    pre_invocation:
-      - "require(team.engineering | team.security)"
-      - opa:
-          query: data.authz.allow
-          on_deny:
-            - "deny('engineering may read internal repos only; security may read any', 'opa.policy_denied')"
-      - "delegate(github-oauth, target: github-api, audience: github-api, permissions: [repo:read:internal])"
-      - "!(delegation.granted.permissions contains 'repo:read:internal'): deny"
-      - "run(audit-log)"
+    authorization:
+      pre_invocation:
+        - "require(team.engineering | team.security)"
+        - opa:
+            query: data.authz.allow
+            on_deny:
+              - "deny('engineering may read internal repos only; security may read any', 'opa.policy_denied')"
+        - "delegate(github-oauth, target: github-api, audience: github-api, permissions: [repo:read:internal])"
+        - "!(delegation.granted.permissions contains 'repo:read:internal'): deny"
+        - "run(audit-log)"
 
   - tool: send_email
-    pre_invocation:
-      - "require(perm.email_send)"
-      - "run(audit-log)"
-      - "run(pii-scan)"
-      - "security.labels contains \"secret\": deny('external email blocked: this session accessed secret data', 'session_tainted_secret')"
+    authorization:
+      pre_invocation:
+        - "require(perm.email_send)"
+        - "run(audit-log)"
+        - "run(pii-scan)"
+        - "security.labels contains \"secret\": deny('external email blocked: this session accessed secret data', 'session_tainted_secret')"
 
   # Sensitive mutating action. Small changes go straight through; an
   # adjustment over $10K requires the requester's manager to approve
@@ -314,9 +386,10 @@ routes:
   # route is PDP-independent (no cedar:/cel:/opa: step), so it behaves
   # identically under all three variants.
   - tool: adjust_compensation
-    pre_invocation:
-      - "require(role.hr)"
-      - when: "args.amount > 10000"
-        do:
-          - "require_approval(manager-approver, from: claim.manager, channel: \"ciba\", scope: \"args.amount <= 25000\", purpose: \"Approve a compensation adjustment\", timeout: 24h)"
-      - "run(audit-log)"
+    authorization:
+      pre_invocation:
+        - "require(role.hr)"
+        - when: "args.amount > 10000"
+          do:
+            - "require_approval(manager-approver, from: claim.manager, channel: \"ciba\", scope: \"args.amount <= 25000\", purpose: \"Approve a compensation adjustment\", timeout: 24h)"
+        - "run(audit-log)"

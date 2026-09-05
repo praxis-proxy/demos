@@ -39,6 +39,15 @@ MAX_POLLS="${MAX_POLLS:-20}"
 BOB=$(mint bob)
 CLIENT=$(mint hr-copilot)
 
+# The auth-channel keeps entries from earlier runs, including abandoned ones
+# a manual run left pending. Record them now so S2 can tell this run's request
+# apart from those.
+PRE_ARIDS=""
+if [ -n "${AUTO_APPROVE:-}" ]; then
+  PRE_ARIDS=$(curl -fsS "$AUTH_CHANNEL/pending" 2>/dev/null \
+                | jq -r '.[].auth_req_id' 2>/dev/null) || true
+fi
+
 # --- S1 · the sensitive ask -----------------------------------------------
 step "S1 · Bob (HR) → adjust_compensation (+\$$AMOUNT, over the \$10k threshold)"
 note "Expected: HTTP 200 + JSON-RPC error -32120 (pending) — NOT a deny"
@@ -67,14 +76,21 @@ if [ -n "${AUTO_APPROVE:-}" ]; then
   note "Driving the auth-channel approval UI programmatically — no human click"
   # The auth-channel keys pending requests by Keycloak's authReqId (not the
   # gateway's elicitation_id), so look it up via the dev-only /pending API.
+  # Take the newest id absent from PRE_ARIDS: approving a leftover would report
+  # success while the gateway kept waiting on its own request.
   ARID=""
   for _ in $(seq 1 "$MAX_POLLS"); do
     ARID=$(curl -fsS "$AUTH_CHANNEL/pending?login_hint=$APPROVER" 2>/dev/null \
-             | jq -r '.[0].auth_req_id // empty' 2>/dev/null) || true
+             | jq -r --arg pre "$PRE_ARIDS" '
+                 ($pre | split("\n") | map(select(length > 0))) as $seen
+                 | [ .[]
+                     | select(.status == "pending")
+                     | select(.auth_req_id | IN($seen[]) | not) ]
+                 | last.auth_req_id // empty' 2>/dev/null) || true
     [ -n "$ARID" ] && break
     sleep 1
   done
-  [ -n "$ARID" ] || { note "No pending request for $APPROVER at $AUTH_CHANNEL."; exit 1; }
+  [ -n "$ARID" ] || { note "No new pending request for $APPROVER at $AUTH_CHANNEL."; exit 1; }
   note "auth_req_id: $ARID → POST /approve"
   curl -fsS -X POST "$AUTH_CHANNEL/approve/$ARID" >/dev/null
   note "Approved. Keycloak releases the token on the gateway's next CIBA poll."

@@ -6,10 +6,10 @@
 #
 # The gateway (./gateway) is a thin binary that composes praxis-ai's AI filters
 # (mcp classifier, ...) with the `policy` filter: it depends on praxis-ai's
-# server, enables `policy-engine`, and `[patch]`es praxis-proxy-* to a local
-# praxis checkout (via `gateway/.praxis`), because the engine port it needs is
-# unreleased. praxis-ai + the feature auto-register both filters — no manual
-# wiring.
+# server, enables `policy-engine`, and `[patch]`es praxis-proxy-* to a praxis
+# checkout (via `gateway/.praxis`), because no published praxis carries the
+# `policy-engine` feature. praxis-ai + the feature auto-register both filters,
+# so there is no manual wiring.
 #
 # Where the praxis checkout comes from (first match wins), resolved into the
 # gitignored `gateway/.praxis`:
@@ -17,6 +17,14 @@
 #   existing gateway/.praxis            reused as-is
 #   otherwise                           clone PRAXIS_GIT_URL @ PRAXIS_GIT_REF,
 #                                       defaulting to the pinned commit below
+#
+# The policy engine itself comes from crates.io. A checkout is still needed at
+# `gateway/.policy` for the two reference plugins, which are unpublished, and for
+# the two engine crates they reach by path (see gateway/Cargo.toml).
+#
+# Usually not a second thing to point at: a sibling `praxis-policy` next to
+# whatever .praxis resolved to is used when there is one. PPE_DIR overrides, and
+# a clone at the tag below is the fallback, which is what a fresh checkout gets.
 #
 # The default ref is a commit, not a branch. praxis main moves, and the demo
 # builds it from source, so tracking a branch means the demo can break without
@@ -26,12 +34,18 @@
 #   GATEWAY_PROFILE=release|debug       (default: release)
 set -euo pipefail
 
-# praxis main @ #943, the commit that moved the policy filter onto the Praxis
-# Policy Engine. Verified with this demo end to end. Bump deliberately.
-DEFAULT_PRAXIS_REF="c9c2a46898ebd47f58cffde5865f9e976078fa6e"
+# praxis main @ #1096, the PPE 0.2.0 port. Verified with this demo end to end.
+# Bump deliberately.
+DEFAULT_PRAXIS_REF="38ff3e7b58fe295e93d2f4c3ad20a4a29337fa2f"
+
+# The engine release the gateway resolves from crates.io. The checkout supplies
+# the reference plugins, so keep it on the tag matching that release: a branch
+# would link its `praxis-policy-core` against the published rest of the engine.
+DEFAULT_PPE_REF="v0.2.0"
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/gateway"
 PRAXIS_LINK="$DIR/.praxis"
+PPE_LINK="$DIR/.policy"
 
 # 1. Resolve the praxis source into ./gateway/.praxis.
 #
@@ -63,6 +77,42 @@ else
     git -C "$PRAXIS_LINK" checkout --quiet --detach "$ref"
   fi
   echo "gateway: .praxis at $(git -C "$PRAXIS_LINK" rev-parse --short HEAD)" >&2
+fi
+
+# 1b. Resolve the policy engine into ./gateway/.policy.
+#
+# A sibling of whatever .praxis resolved to is preferred, so a developer working
+# on both does not point at the engine twice. praxis itself reads the engine from
+# crates.io, so this is a convenience rather than a constraint.
+if [ -n "${PPE_DIR:-}" ]; then
+  target="$(cd "$PPE_DIR" && pwd)"
+  ln -sfn "$target" "$PPE_LINK"
+  echo "gateway: .policy -> $target (PPE_DIR)" >&2
+elif [ -L "$PPE_LINK" ]; then
+  echo "gateway: .policy -> $(readlink "$PPE_LINK") (existing symlink)" >&2
+elif [ -d "$PPE_LINK/.git" ] && [ -z "${PPE_GIT_URL:-}" ]; then
+  echo "gateway: .policy (existing clone, reused as-is)" >&2
+elif sibling="$(cd "$PRAXIS_LINK/../praxis-policy" 2>/dev/null && pwd)"; then
+  # `cd` through the symlink, so this is the sibling of what .praxis points at
+  # rather than of the link itself.
+  ln -sfn "$sibling" "$PPE_LINK"
+  echo "gateway: .policy -> $sibling (sibling of .praxis)" >&2
+else
+  url="${PPE_GIT_URL:-https://github.com/praxis-proxy/policy.git}"
+  ref="${PPE_GIT_REF:-$DEFAULT_PPE_REF}"
+  if [ -d "$PPE_LINK/.git" ]; then
+    echo "gateway: updating .policy -> $ref ($url)" >&2
+    git -C "$PPE_LINK" fetch --quiet --tags --force origin "$ref" 2>/dev/null \
+      || git -C "$PPE_LINK" fetch --quiet --tags --force origin
+    git -C "$PPE_LINK" checkout --quiet --detach "$ref" 2>/dev/null \
+      || git -C "$PPE_LINK" checkout --quiet --detach FETCH_HEAD
+  else
+    echo "gateway: cloning .policy <- $url @ $ref" >&2
+    rm -rf "$PPE_LINK"
+    git clone --quiet "$url" "$PPE_LINK"
+    git -C "$PPE_LINK" checkout --quiet --detach "$ref"
+  fi
+  echo "gateway: .policy at $(git -C "$PPE_LINK" rev-parse --short HEAD)" >&2
 fi
 
 # 2. Build.

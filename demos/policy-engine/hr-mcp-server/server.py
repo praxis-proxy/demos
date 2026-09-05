@@ -234,6 +234,13 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
     interesting_headers = [
         "authorization", "x-user-token", "x-policy-violation",
         "x-praxis-mcp-method", "x-praxis-mcp-name",
+        # Asserted by the gateway's `global.assertions.request:` block. These
+        # are the engine telling us what it decided. Unsigned: we believe them
+        # because we believe nothing between the gateway and here can set them.
+        # `x-user-token` above is stripped by the same block, so it should be
+        # absent, and a client that sends `x-auth-user-id` itself should see it
+        # replaced rather than forwarded. Scenario 12 checks both.
+        "x-auth-user-id", "x-auth-username", "x-auth-roles", "x-auth-context",
     ]
     for name in interesting_headers:
         v = request.headers.get(name)

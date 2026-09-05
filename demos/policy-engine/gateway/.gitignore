@@ -1,8 +1,11 @@
-# Local praxis checkout the build script resolves, and build output.
-# The policy engine is not here: praxis pins it by git revision, so cargo fetches
-# it rather than reading a sibling path.
+# Local checkouts the build script resolves, and build output. Both repos are
+# unreleased for this demo, and cargo honours `[patch]` only in the workspace
+# root it builds, so the gateway names the policy-engine crates itself and needs
+# the second checkout on disk. See build-gateway.sh.
 /.praxis
+/.policy
 # ... and any hand-made backup of it, which is a git checkout too and would
 # otherwise be staged as an embedded repository.
 /.praxis.*
+/.policy.*
 /target
