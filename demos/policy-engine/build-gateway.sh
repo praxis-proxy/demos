@@ -6,10 +6,10 @@
 #
 # The gateway (./gateway) is a thin binary that composes praxis-ai's AI filters
 # (mcp classifier, ...) with the `policy` filter: it depends on praxis-ai's
-# server, enables `policy-engine`, and `[patch]`es praxis-proxy-* to a local
-# praxis checkout (via `gateway/.praxis`), because the engine port it needs is
-# unreleased. praxis-ai + the feature auto-register both filters — no manual
-# wiring.
+# server, enables `policy-engine`, and `[patch]`es praxis-proxy-* to a praxis
+# checkout (via `gateway/.praxis`), because no published praxis carries the
+# `policy-engine` feature. praxis-ai + the feature auto-register both filters,
+# so there is no manual wiring.
 #
 # Where the praxis checkout comes from (first match wins), resolved into the
 # gitignored `gateway/.praxis`:
@@ -22,10 +22,9 @@
 # `gateway/.policy` for the two reference plugins, which are unpublished, and for
 # the two engine crates they reach by path (see gateway/Cargo.toml).
 #
-# It is not a second thing to point at, though. praxis reads the engine as
-# `../praxis-policy`, so once .praxis is resolved the engine is its sibling and
-# .policy is derived from it. PPE_DIR overrides, and a clone is the fallback when
-# there is no sibling to find.
+# Usually not a second thing to point at: a sibling `praxis-policy` next to
+# whatever .praxis resolved to is used when there is one. PPE_DIR overrides, and
+# a clone at the tag below is the fallback, which is what a fresh checkout gets.
 #
 # The default ref is a commit, not a branch. praxis main moves, and the demo
 # builds it from source, so tracking a branch means the demo can break without
@@ -35,14 +34,9 @@
 #   GATEWAY_PROFILE=release|debug       (default: release)
 set -euo pipefail
 
-# praxis main @ #943, the commit that moved the policy filter onto the Praxis
-# Policy Engine. Verified with this demo end to end. Bump deliberately.
-#
-# Stale on two counts until the PPE 0.2.0 port lands on praxis main: it predates
-# both that port and the move of the crates under `crates/`, which gateway's
-# `[patch]` paths now assume. Until then this demo needs `.praxis` pointing at a
-# checkout carrying the port, which is what PRAXIS_DIR and the symlink are for.
-DEFAULT_PRAXIS_REF="c9c2a46898ebd47f58cffde5865f9e976078fa6e"
+# praxis main @ #1096, the PPE 0.2.0 port. Verified with this demo end to end.
+# Bump deliberately.
+DEFAULT_PRAXIS_REF="38ff3e7b58fe295e93d2f4c3ad20a4a29337fa2f"
 
 # The engine release the gateway resolves from crates.io. The checkout supplies
 # the reference plugins, so keep it on the tag matching that release: a branch
@@ -87,10 +81,9 @@ fi
 
 # 1b. Resolve the policy engine into ./gateway/.policy.
 #
-# Derived from .praxis rather than asked for separately: praxis's own manifest
-# reads the engine as `../praxis-policy`, so whoever pointed .praxis at a
-# checkout already said where the engine is. Following the same relative path
-# keeps the two from disagreeing about which engine praxis was built against.
+# A sibling of whatever .praxis resolved to is preferred, so a developer working
+# on both does not point at the engine twice. praxis itself reads the engine from
+# crates.io, so this is a convenience rather than a constraint.
 if [ -n "${PPE_DIR:-}" ]; then
   target="$(cd "$PPE_DIR" && pwd)"
   ln -sfn "$target" "$PPE_LINK"

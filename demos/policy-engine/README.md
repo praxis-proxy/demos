@@ -165,8 +165,8 @@ praxis-ai's server and enables the `policy-engine` feature, which registers
 `gateway/Cargo.toml` also `[patch]`es `praxis-proxy-*` to a praxis checkout in the
 gitignored `gateway/.praxis`, and the policy engine's crates to a second checkout
 in `gateway/.policy`. Neither is a fork: no *published* praxis version carries the
-`policy-engine` feature, and the engine release it is built against is unreleased
-too, so the demo builds both from source.
+`policy-engine` feature, and the engine's two reference plugins are unpublished,
+so the demo builds both from source.
 
 The engine needs its own `[patch]` entries here rather than inheriting praxis's,
 because cargo honours `[patch]` only in the workspace root it is building. Every
@@ -183,11 +183,11 @@ from crates.io and the graph ends up with two copies of it, which for
 | an existing `gateway/.praxis` | Reused as-is, never fetched into. |
 | default | Clones `PRAXIS_GIT_URL` (upstream praxis) at `PRAXIS_GIT_REF`, which defaults to a **pinned commit**, not a branch. |
 
-`gateway/.policy` is derived rather than asked for: praxis reads the engine as
-`../praxis-policy`, so pointing `.praxis` at a checkout already says where the
-engine is and `.policy` follows the same relative path. `PPE_DIR` overrides it,
-and a clone of `PPE_GIT_URL` at `PPE_GIT_REF` is the fallback when there is no
-sibling to find.
+`gateway/.policy` is usually not a second thing to point at: a sibling
+`praxis-policy` next to whatever `.praxis` resolved to is used when there is one,
+so working on both at once means pointing at one. `PPE_DIR` overrides it, and a
+clone of `PPE_GIT_URL` at `PPE_GIT_REF` is the fallback, which is what a fresh
+checkout gets.
 
 ```bash
 # Nothing to set — clones upstream praxis at the pinned commit:
