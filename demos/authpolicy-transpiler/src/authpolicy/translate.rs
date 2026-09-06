@@ -28,7 +28,7 @@ use super::{
     cel::{self, Remap},
     emit::{
         AuthorizationOut, PolicyDoc, DecodingKey, FilterBlock, GlobalOut, JwtConfig, PdpEntry,
-        PluginEntry, PluginSettings, PolicyStep, TrustedIssuer,
+        PluginEntry, PolicyStep, TrustedIssuer,
     },
     model::{AuthPolicy, AuthScheme, AuthnMethod, AuthzMethod, PatternExpr, ResponseSpec, Spec},
     report::{Report, Severity},
@@ -97,7 +97,7 @@ pub(crate) fn transpile(policy: &AuthPolicy, slug: &str) -> Transpiled {
     // Emit under the engine's `global` policy using the canonical
     // `authentication:` + `authorization:` block form (no `apl:` wrapper) —
     // the designed home for catch-all, non-entity HTTP policies. The engine
-    // evaluates it for generic HTTP requests via the `cmf.http_request` hook.
+    // evaluates it for generic HTTP requests via the `http.request` hook.
     // A `cel:` step needs the `cel` resolver declared into the policy's PDP
     // router; without `pdp: [{ kind: cel }]` every `cel:` step fails closed
     // (deny) at evaluation time. Emit the declaration whenever any step is a
@@ -117,13 +117,7 @@ pub(crate) fn transpile(policy: &AuthPolicy, slug: &str) -> Transpiled {
             pdp,
         });
 
-    let doc = PolicyDoc {
-        plugin_settings: PluginSettings {
-            routing_enabled: true,
-        },
-        plugins,
-        global,
-    };
+    let doc = PolicyDoc { plugins, global };
 
     let filter_block = FilterBlock {
         filter: "policy".to_owned(),
@@ -235,6 +229,7 @@ fn translate_authn(scheme: &AuthScheme, report: &mut Report) -> Vec<PluginEntry>
                 plugins.push(PluginEntry {
                     name: name.clone(),
                     kind: "identity/jwt".to_owned(),
+                    capabilities: vec!["perform_http".to_owned()],
                     hooks: vec!["identity.resolve".to_owned()],
                     on_error: "fail".to_owned(),
                     config: JwtConfig {
@@ -243,6 +238,7 @@ fn translate_authn(scheme: &AuthScheme, report: &mut Report) -> Vec<PluginEntry>
                         trusted_issuers: vec![TrustedIssuer {
                             issuer,
                             audiences: Vec::new(),
+                            skip_audience_validation: true,
                             algorithms: DEFAULT_JWT_ALGORITHMS.iter().map(|s| (*s).to_owned()).collect(),
                             decoding_key: DecodingKey::JwksUrl { url },
                         }],
@@ -257,6 +253,12 @@ fn translate_authn(scheme: &AuthScheme, report: &mut Report) -> Vec<PluginEntry>
                 if let Some(note) = jwks_note {
                     report.approximated(&construct, Severity::Warning, note);
                 }
+                report.translated(
+                    &construct,
+                    "a Kuadrant JWT block cannot express an audience, so the emitted issuer sets \
+                     skip_audience_validation: true, which is the same `aud` posture as before. \
+                     Narrow it by listing the audiences the IdP mints for this gateway.",
+                );
                 if rule.priority.is_some() && jwt_count > 1 {
                     report.approximated(
                         &construct,

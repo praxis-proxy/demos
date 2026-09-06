@@ -25,6 +25,10 @@ filter_chains:
     filters:
       - filter: policy
         config_path: ./out/jwt-cel-http-policy-doc.yaml
+        # Keycloak runs on localhost here. The engine refuses loopback and
+        # private IdP addresses by default, since a jwks_url in a policy
+        # document is an SSRF primitive when anyone but the operator can set it.
+        allow_private_idp: true
 
       - filter: router
         routes:
@@ -36,3 +40,11 @@ filter_chains:
           - name: echo-backend
             endpoints:
               - "127.0.0.1:9200"
+
+# The echo backend runs on loopback. Praxis refuses private and loopback
+# upstreams by default, which is the right default for a real proxy and an
+# explicit opt-in for a demo that runs entirely on one machine. Distinct from
+# the policy filter's `allow_private_idp`, which governs the engine's own
+# outbound calls to the IdP.
+insecure_options:
+  allow_private_endpoints: true
