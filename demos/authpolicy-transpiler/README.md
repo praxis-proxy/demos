@@ -25,25 +25,37 @@ cargo run -- examples/jwt-rbac.yaml
 cargo run -- examples/jwt-rbac.yaml --out-dir ./out
 ```
 
-The emitted policy uses the canonical block form:
+The emitted policy uses the canonical block form. A `when` over the request line becomes an `http:` route selector, so each rule carries only its own condition:
 
 ```yaml
 plugins:
   - name: keycloak-jwt
     kind: identity/jwt
+    capabilities: [perform_http]          # the engine performs no outbound HTTP itself
     hooks: [identity.resolve]
     on_error: fail
     config: { ... }
+routes:
+  - http: { path_prefix: /api, method: [GET] }
+    authorization:
+      pre_invocation:
+        - cel: { expr: "<remapped CEL>" }
+  - http: { path_prefix: / }              # catch-all, governed by `global:` below
 global:
   authentication:
     - keycloak-jwt
   authorization:
     pre_invocation:
-      - "require(authenticated)"          # native presence gate
-      - cel: { expr: "<remapped CEL>" }   # one per Kuadrant rule
+      - "require(authenticated)"          # native presence gate, stacked into every route
+  pdp:
+    - kind: cel
 ```
 
-Kuadrant `patternMatching`/`when` predicates are CEL, so each translated rule is emitted as a `cel: { expr }` PDP step — dispatched to the engine's bundled `cel` resolver, which evaluates full CEL (`startsWith`, `&&`/`||`, literal `in`). The APL-native `require(...)` form is used only for the `require(authenticated)` presence gate and the `require(false)` fail-closed sentinel, because `require(...)` parses APL's own predicate DSL, not CEL.
+`spec.when` becomes `path_prefix` when it is exactly `request.path.startsWith('<absolute>')`, and a rule's own `when` becomes `method` when it is exactly `request.method == '<M>'` or a `||` chain of those. Recognition is all-or-nothing: a predicate the selector cannot express in full stays CEL, gating its rule as `!(when) || (rule)` the way it always did. So a negated or compound activation (`!request.path.startsWith('/public')`) emits no route and nothing is lost.
+
+Rules sharing a selector are merged into one route. Two routes with identical coordinates would make the engine keep the second and warn, which would drop a rule.
+
+Everything left is a `cel: { expr }` PDP step, dispatched to the engine's bundled `cel` resolver, which evaluates full CEL (`startsWith`, `&&`/`||`, literal `in`). The APL-native `require(...)` form is used only for the `require(authenticated)` presence gate and the `require(false)` fail-closed sentinel, because `require(...)` parses APL's own predicate DSL, not CEL. `require(authenticated)` and `pdp:` sit on `global:`: the engine stacks the global layer into every route, and `pdp:` is a `global:` key and nowhere else.
 
 The coverage report summarises the mapping:
 
@@ -86,10 +98,12 @@ That single command:
 5. Starts a tiny echo backend (`:9200`) and the gateway (`:8095`, `e2e/praxis.yaml`: `policy` → `router` → `load_balancer`).
 6. Mints `alice`/`bob` tokens (`e2e/mint-token.sh`) and exercises the CEL policy.
 
-The AuthPolicy expresses two CEL rules over the HTTP request line and top-level identity claims — Kuadrant array-membership maps to the engine's boolean identity namespaces (`role.*` / `perm.*`), which the `standard` claim mapper populates:
+The AuthPolicy expresses two rules over the HTTP request line and top-level identity claims. The request-line half becomes route selectors and the identity half stays CEL, where Kuadrant array-membership maps to the engine's boolean identity namespaces (`role.*` / `perm.*`) that the `standard` claim mapper populates:
 
-- **reads** (`GET`) require the `tool_execute` permission — `'tool_execute' in auth.identity.permissions` → `has(perm.tool_execute) && perm.tool_execute`
-- **writes** (`POST`/`DELETE`) require the `hr` role — `'hr' in auth.identity.roles` → `has(role.hr) && role.hr`
+- **reads** — `http: { path_prefix: /api, method: [GET] }` requires the `tool_execute` permission: `'tool_execute' in auth.identity.permissions` → `has(perm.tool_execute) && perm.tool_execute`
+- **writes** — `http: { path_prefix: /api, method: [POST, DELETE] }` requires the `hr` role: `'hr' in auth.identity.roles` → `has(role.hr) && role.hr`
+
+Both are the same decisions the folded form made; what moved is where the request shape is matched. The router picks the route, so the PDP evaluates one identity predicate instead of an implication over the path and method tests.
 
 | Request | Persona | Result | Why |
 |---|---|---|---|
@@ -123,6 +137,7 @@ The emitted documents are checked by the golden corpus under `tests/` and the st
 | `src/main.rs` | CLI entry: parse args, transpile each input, emit artifacts, exit non-zero on fail-closed. |
 | `src/authpolicy/model.rs` | Serde model for the supported `AuthPolicy` subset (best-effort parse). |
 | `src/authpolicy/cel.rs` | Kuadrant to Praxis Policy Engine CEL namespace remap (`auth.identity.*` to `claim.*`, `request.*` to `http.*`). |
+| `src/authpolicy/selector.rs` | Which remapped predicates an `http:` route selector can carry (path prefix, method). Strict: whole predicate or nothing. |
 | `src/authpolicy/translate.rs` | Core translation to the canonical engine blocks; fail-closed logic. |
 | `src/authpolicy/emit.rs` | Serializable shapes for the policy doc + Praxis filter block. |
 | `src/authpolicy/report.rs` | Coverage report (translated / approximated / skipped). |

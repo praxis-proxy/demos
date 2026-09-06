@@ -33,4 +33,5 @@ pub(crate) mod cel;
 pub(crate) mod emit;
 pub(crate) mod model;
 pub(crate) mod report;
+pub(crate) mod selector;
 pub(crate) mod translate;

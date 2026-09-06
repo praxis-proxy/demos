@@ -275,7 +275,11 @@ mod golden_tests {
         // Quote-agnostic: serde_yaml single-quotes the `!(`-leading cel expr
         // scalar and doubles the inner quotes (`''admin''`).
         assert!(rbac.policy_doc.contains("in claim.realm_access.roles"));
+        // `spec.when` here is a negated prefix, which a route selector cannot
+        // express, so the method gates stay folded into the expressions rather
+        // than becoming selectors. Dropping them would widen the rules.
         assert!(rbac.policy_doc.contains("http.method =="));
+        assert!(!rbac.policy_doc.contains("routes:"), "no route without a positive path prefix");
         assert!(!rbac.report.has_fatal(), "jwt-rbac should not fail closed");
 
         // Kuadrant CEL predicates emit as `cel:` PDP steps, gated by a native
@@ -371,6 +375,15 @@ mod golden_tests {
         assert!(
             clean.policy_doc.contains("has(role.hr) && role.hr"),
             "role membership → role.<name> boolean"
+        );
+        // The path activation and the per-rule method gates are selectors, so
+        // neither appears as a predicate the PDP has to evaluate.
+        assert!(clean.policy_doc.contains("path_prefix: /api"), "path activation → route selector");
+        assert!(!clean.policy_doc.contains("http.path.startsWith"), "path test is not also CEL");
+        assert!(!clean.policy_doc.contains("http.method =="), "method gates are not also CEL");
+        assert!(
+            clean.policy_doc.contains("path_prefix: /\n"),
+            "a catch-all route so uncovered traffic is governed by global:"
         );
         assert!(
             clean.policy_doc.contains("has(perm.tool_execute) && perm.tool_execute"),

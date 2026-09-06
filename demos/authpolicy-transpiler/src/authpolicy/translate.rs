@@ -28,7 +28,7 @@ use super::{
     cel::{self, Remap},
     emit::{
         AuthorizationOut, PolicyDoc, DecodingKey, FilterBlock, GlobalOut, JwtConfig, PdpEntry,
-        PluginEntry, PolicyStep, TrustedIssuer,
+        HttpSelector, PluginEntry, PolicyStep, RouteOut, TrustedIssuer,
     },
     model::{AuthPolicy, AuthScheme, AuthnMethod, AuthzMethod, PatternExpr, ResponseSpec, Spec},
     report::{Report, Severity},
@@ -68,7 +68,21 @@ pub(crate) fn transpile(policy: &AuthPolicy, slug: &str) -> Transpiled {
 
     let plugins = scheme.map_or_else(Vec::new, |s| translate_authn(s, &mut report));
     let authentication = scheme.map_or_else(Vec::new, jwt_plugin_names);
-    let policy_steps = scheme.map_or_else(Vec::new, |s| translate_authz(policy, s, &mut report));
+
+    // Resolved before the rules, because it decides whether a rule's own `when`
+    // can become a selector. Without a path prefix there is no route to put one
+    // on, and a selector nothing carries would drop the gate.
+    let when = top_level_when(&policy.spec, &mut report);
+    let route_prefix = when.as_deref().and_then(super::selector::path_prefix);
+    if let Some(prefix) = route_prefix.as_deref() {
+        report.translated(
+            "spec.when",
+            format!("path activation → `http:` route selector (path_prefix: {prefix})."),
+        );
+    }
+    let policy_steps = scheme.map_or_else(Vec::new, |s| {
+        translate_authz(policy, s, route_prefix.is_some(), &mut report)
+    });
 
     if let Some(s) = scheme {
         if let Some(resp) = s.response.as_ref() {
@@ -77,22 +91,29 @@ pub(crate) fn transpile(policy: &AuthPolicy, slug: &str) -> Transpiled {
         report_metadata_callbacks(s, &mut report);
     }
 
-    // Prepend the native `require(authenticated)` presence gate when an
-    // identity is configured: a cheap APL attribute check that denies before
-    // any CEL PDP step runs if no verified subject resolved. (Identity itself
-    // also fails closed via the plugin's `on_error: fail`; this makes the
-    // policy's presence requirement explicit.) It is intentionally not gated
-    // by `spec.when` — presence is required whenever the policy is active.
-    let mut policy_steps = policy_steps;
+    // The presence gate lives on `global:` either way: the engine stacks the
+    // global layer into every route, so one declaration covers the routes and
+    // the traffic none of them match. It is intentionally not gated by
+    // `spec.when` — presence is required whenever the policy is active.
+    let mut global_steps = Vec::new();
     if !authentication.is_empty() {
-        policy_steps.insert(0, PolicyStep::require_authenticated());
+        global_steps.push(PolicyStep::require_authenticated());
     }
 
-    // `spec.when` (policy activation) folds into each CEL step: the flat
-    // `global` form has no route-level `when` gate, so a rule only denies
-    // when the activation condition holds.
-    let when = top_level_when(&policy.spec, &mut report);
-    let steps = gate_with_when(policy_steps, when.as_deref());
+    let (routes, mut steps) = if let Some(prefix) = route_prefix {
+        (build_routes(&prefix, policy_steps), global_steps)
+    } else {
+        let flat = policy_steps.into_iter().map(|s| s.step).collect();
+        global_steps.extend(gate_with_when(flat, when.as_deref()));
+        (Vec::new(), global_steps)
+    };
+    // A CEL step under a route needs the resolver declared too, and `pdp:` is a
+    // `global:` key and nowhere else.
+    let route_has_cel = routes.iter().any(|r| {
+        r.authorization
+            .as_ref()
+            .is_some_and(|a| a.pre_invocation.iter().any(|s| matches!(s, PolicyStep::Cel { .. })))
+    });
 
     // Emit under the engine's `global` policy using the canonical
     // `authentication:` + `authorization:` block form (no `apl:` wrapper) —
@@ -102,11 +123,12 @@ pub(crate) fn transpile(policy: &AuthPolicy, slug: &str) -> Transpiled {
     // router; without `pdp: [{ kind: cel }]` every `cel:` step fails closed
     // (deny) at evaluation time. Emit the declaration whenever any step is a
     // CEL step.
-    let pdp = if steps.iter().any(|s| matches!(s, PolicyStep::Cel { .. })) {
+    let pdp = if route_has_cel || steps.iter().any(|s| matches!(s, PolicyStep::Cel { .. })) {
         vec![PdpEntry::cel()]
     } else {
         Vec::new()
     };
+    let steps = std::mem::take(&mut steps);
     let authorization = (!steps.is_empty()).then_some(AuthorizationOut {
         pre_invocation: steps,
     });
@@ -117,7 +139,11 @@ pub(crate) fn transpile(policy: &AuthPolicy, slug: &str) -> Transpiled {
             pdp,
         });
 
-    let doc = PolicyDoc { plugins, global };
+    let doc = PolicyDoc {
+        plugins,
+        routes,
+        global,
+    };
 
     let filter_block = FilterBlock {
         filter: "policy".to_owned(),
@@ -288,11 +314,21 @@ fn translate_authn(scheme: &AuthScheme, report: &mut Report) -> Vec<PluginEntry>
 /// Translate authorization rules into `cel: { expr }` PDP steps, failing
 /// closed with `require(false)` if authz was declared but nothing translated
 /// (R19).
+/// One translated authorization rule, with the request methods it scopes to
+/// when its `when` said exactly that and nothing more.
+pub(crate) struct AuthzStep {
+    /// `Some` when the rule's `when` became a route selector rather than a
+    /// guard folded into the expression.
+    pub methods: Option<Vec<String>>,
+    pub step: PolicyStep,
+}
+
 fn translate_authz(
     policy: &AuthPolicy,
     scheme: &AuthScheme,
+    routes_carry_selectors: bool,
     report: &mut Report,
-) -> Vec<PolicyStep> {
+) -> Vec<AuthzStep> {
     // Pre-translate named patterns so `patternRef` can inline them.
     let named = translate_named_patterns(&policy.spec, report);
 
@@ -324,7 +360,11 @@ fn translate_authz(
                     continue;
                 };
 
-                // Per-rule `when` gates the rule: applies => require(expr).
+                // Per-rule `when` becomes a route method selector when it says
+                // exactly that, because a selector the engine matches on beats a
+                // guard the PDP has to evaluate. Otherwise it gates the rule:
+                // applies => require(expr).
+                let mut methods = None;
                 if let Some(when) = rule.when.as_ref() {
                     let mut wctx = CelCtx {
                         report,
@@ -333,7 +373,17 @@ fn translate_authz(
                         ok: true,
                     };
                     if let Some(when_cel) = patterns_anded(when, &mut wctx) {
-                        expr = format!("!({when_cel}) || ({expr})");
+                        if let Some(found) =
+                            routes_carry_selectors.then(|| super::selector::methods(&when_cel)).flatten()
+                        {
+                            report.translated(
+                                &construct,
+                                format!("rule `when` → `http:` route selector (method: {}).", found.join(", ")),
+                            );
+                            methods = Some(found);
+                        } else {
+                            expr = format!("!({when_cel}) || ({expr})");
+                        }
                     } else {
                         report.approximated(
                             &construct,
@@ -350,7 +400,10 @@ fn translate_authz(
                     nested_claim_seen = true;
                 }
 
-                steps.push(PolicyStep::cel(expr));
+                steps.push(AuthzStep {
+                    methods,
+                    step: PolicyStep::cel(expr),
+                });
                 if translated_ok {
                     report.translated(&construct, "patternMatching → CEL PDP step (`cel: { expr }`).");
                 } else {
@@ -394,10 +447,66 @@ fn translate_authz(
             Severity::Fatal,
             "authorization rules were declared but none translated to an enforceable policy; emitting deny-all to avoid failing open.",
         );
-        steps.push(PolicyStep::deny_all());
+        steps.push(AuthzStep {
+            methods: None,
+            step: PolicyStep::deny_all(),
+        });
     }
 
     steps
+}
+
+/// Group the translated rules into `http:` routes under one path prefix.
+///
+/// Grouped by method selector, and that grouping is the point rather than a
+/// tidiness: two rules scoped to the same request shape would otherwise emit two
+/// routes with identical coordinates, where the engine keeps the second and
+/// warns, silently dropping a rule. First-seen order is kept so the emitted file
+/// reads in the order the policy was written.
+///
+/// A catch-all is appended unless the prefix already is one. `http:` routes send
+/// the traffic they do not cover to the global policy, and the engine reports a
+/// route set that declares no catch-all at load; the appended route carries no
+/// policy of its own, so that traffic is governed by `global:` either way.
+fn build_routes(prefix: &str, steps: Vec<AuthzStep>) -> Vec<RouteOut> {
+    let mut order: Vec<Option<Vec<String>>> = Vec::new();
+    let mut grouped: Vec<Vec<PolicyStep>> = Vec::new();
+    for AuthzStep { methods, step } in steps {
+        match order.iter().position(|m| *m == methods) {
+            Some(at) => {
+                if let Some(slot) = grouped.get_mut(at) {
+                    slot.push(step);
+                }
+            },
+            None => {
+                order.push(methods);
+                grouped.push(vec![step]);
+            },
+        }
+    }
+
+    let mut routes: Vec<RouteOut> = order
+        .into_iter()
+        .zip(grouped)
+        .map(|(methods, pre_invocation)| RouteOut {
+            http: HttpSelector {
+                path_prefix: prefix.to_owned(),
+                method: methods.unwrap_or_default(),
+            },
+            authorization: (!pre_invocation.is_empty()).then_some(AuthorizationOut { pre_invocation }),
+        })
+        .collect();
+
+    if prefix != "/" {
+        routes.push(RouteOut {
+            http: HttpSelector {
+                path_prefix: "/".to_owned(),
+                method: Vec::new(),
+            },
+            authorization: None,
+        });
+    }
+    routes
 }
 
 /// Pre-translate `spec.patterns` (named patterns) to CEL, for `patternRef`.

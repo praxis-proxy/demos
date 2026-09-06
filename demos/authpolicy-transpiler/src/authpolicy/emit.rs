@@ -22,8 +22,31 @@ use serde::Serialize;
 #[derive(Debug, Serialize)]
 pub(crate) struct PolicyDoc {
     pub plugins: Vec<PluginEntry>,
+    /// `http:` routes, one per request shape the policy scopes a rule to.
+    /// Emitted before `global:` so the file reads selector-first.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<RouteOut>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub global: Option<GlobalOut>,
+}
+
+/// One `http:` route. The selector carries the request shape a Kuadrant `when`
+/// expressed as a predicate, so the rule under it is only its own condition.
+#[derive(Debug, Serialize)]
+pub(crate) struct RouteOut {
+    pub http: HttpSelector,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authorization: Option<AuthorizationOut>,
+}
+
+/// An `http:` route selector. A segment-boundary prefix, optionally narrowed by
+/// method. Exact paths outrank prefixes and longer prefixes outrank shorter
+/// ones, so the catch-all never shadows a scoped route.
+#[derive(Debug, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct HttpSelector {
+    pub path_prefix: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub method: Vec<String>,
 }
 
 /// One engine plugin entry. Only `identity/jwt` is emitted this iteration.

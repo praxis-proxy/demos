@@ -47,11 +47,11 @@ translated: 4   approximated: 1   skipped: 3
           JWT → identity/jwt (role: user; algorithms default to RS256 — widen in the emitted policy if the IdP signs with ES256/etc.).
 [INFO ] translated    authentication/jwt-internal
           a Kuadrant JWT block cannot express an audience, so the emitted issuer sets skip_audience_validation: true, which is the same `aud` posture as before. Narrow it by listing the audiences the IdP mints for this gateway.
+[INFO ] translated    spec.when
+          policy activation condition folded into the global policy steps.
 [INFO ] translated    authorization/email-verified
           patternMatching → CEL PDP step (`cel: { expr }`).
 [WARN ] skipped       metadata/user-profile
           external metadata fetch is not translated this iteration (best-effort APL bridge is Phase B).
 [WARN ] skipped       callbacks/audit-log
           post-auth callbacks are not translated this iteration (best-effort APL bridge is Phase B).
-[INFO ] translated    spec.when
-          policy activation condition folded into the global policy steps.

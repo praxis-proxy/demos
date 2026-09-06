@@ -49,6 +49,8 @@ translated: 5   approximated: 4   skipped: 1
           issuerUrl maps to OIDC discovery, which the engine's identity/jwt does not perform; set decoding_key.url to the IdP's JWKS endpoint.
 [INFO ] translated    authentication/keycloak-jwt
           a Kuadrant JWT block cannot express an audience, so the emitted issuer sets skip_audience_validation: true, which is the same `aud` posture as before. Narrow it by listing the audiences the IdP mints for this gateway.
+[INFO ] translated    spec.when
+          policy activation condition folded into the global policy steps.
 [INFO ] translated    authorization/members-can-read
           patternMatching → CEL PDP step (`cel: { expr }`).
 [INFO ] translated    authorization/writes-need-admin
@@ -59,5 +61,3 @@ translated: 5   approximated: 4   skipped: 1
           custom unauthenticated denyWith (status/body/headers) is not carried; identity failure returns a default 401 until Phase B (U2/U7).
 [WARN ] approximated  response.unauthorized
           custom unauthorized denyWith (status/body/headers) is not carried; authz denial uses a default status until Phase B (U2/U7).
-[INFO ] translated    spec.when
-          policy activation condition folded into the global policy steps.
