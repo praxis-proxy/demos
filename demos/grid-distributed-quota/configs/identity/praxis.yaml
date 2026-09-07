@@ -1,0 +1,60 @@
+insecure_options:
+  allow_private_endpoints: true
+
+listeners:
+  - name: public-identity
+    address: "0.0.0.0:8080"
+    filter_chains:
+      - identity
+
+filter_chains:
+  - name: identity
+    filters:
+      - filter: basic_auth
+        realm: "Grid distributed quota qualification"
+        strip_authorization: true
+        credentials:
+          - username: application-a
+            password: application-a-secret
+          - username: application-b
+            password: application-b-secret
+          - username: application-c
+            password: application-c-secret
+      - filter: identity_projection
+        subject_header: x-grid-authenticated-subject
+        group_header: x-grid-quota-group
+        subjects:
+          - { subject: application-a, group: group-a }
+          - { subject: application-b, group: group-b }
+          - { subject: application-c, group: group-c }
+      - filter: iterative_request_router
+        initial_step: consumers
+        steps:
+          - name: consumers
+            filters:
+              - filter: router
+                routes:
+                  - path_prefix: "/"
+                    cluster: consumer-gateways
+              - filter: load_balancer
+                clusters:
+                  - name: consumer-gateways
+                    tls:
+                      ca:
+                        ca_path: /etc/praxis/tls/ca.crt
+                      client_cert:
+                        cert_path: /etc/praxis/tls/tls.crt
+                        key_path: /etc/praxis/tls/tls.key
+                      sni: provider-a.grid.internal
+                      verify: true
+                    endpoints:
+                      - consumer-gateway-a.grid-system.svc.cluster.local:8443
+                      - consumer-gateway-b.grid-system.svc.cluster.local:8443
+            on_result:
+              - default: true
+                done: true
+
+admin:
+  address: "127.0.0.1:9901"
+
+shutdown_timeout_secs: 5
