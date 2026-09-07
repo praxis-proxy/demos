@@ -1,0 +1,131 @@
+# Streaming Agentic Loop — SSE Across IRR Rounds
+#
+# Demonstrates a single logical Responses SSE stream preserved across
+# multiple iterative_request_router (IRR) agentic rounds.
+#
+# When the model calls a tool mid-stream, Praxis streams round 1 (the
+# tool call), withholds the terminal `response.completed`, dispatches
+# the tool (web search or MCP), then streams round 2 (the final answer).
+# The client sees ONE continuous stream: a single `response.created`
+# and a single `response.completed` at the very end.
+#
+# Two filters make this work together:
+#   - openai_responses_proxy (terminal_streaming: true)
+#       selects Praxis's typed SSE transport for stream=true requests.
+#   - openai_stream_events (logical_stream: true)
+#       preserves one logical response identity across rounds and
+#       withholds each round's terminal event until the IRR loop
+#       decision is known. REQUIRED when paired with terminal_streaming:
+#       typed streaming commits response.completed as it arrives, so a
+#       loop-terminal error can only reach the client through this
+#       filter's logical-stream finalizer.
+#
+# Pipeline (pre-IRR, runs once):
+#   1. openai_responses_format — classify the request
+#   2. openai_responses_validate — validate parameters
+#   3. openai_tool_parse — parse tool definitions
+#   4. openai_response_store — register SQLite store
+#   5. openai_responses_rehydrate — load previous context
+#   6. openai_mcp_tool_resolve — discover MCP tools
+#
+# IRR inference step (loops, streamed each round):
+#   Request:  stream_events → web_search → mcp_dispatch → agentic_loop
+#             → responses_proxy → router → load_balancer
+#   Response: reverse order; agentic_loop detects tool calls,
+#             dispatch filters execute them and loop back.
+#
+# Build:
+#   cargo build -p praxis-ai-proxy --release
+#
+# Requires: TAVILY_API_KEY in the environment for web search.
+
+listeners:
+  - name: ai-gateway
+    address: "127.0.0.1:8080"
+    filter_chains: [streaming-agentic-pipeline]
+
+filter_chains:
+  - name: streaming-agentic-pipeline
+    filters:
+      - filter: openai_responses_format
+        on_invalid: reject
+        headers:
+          format: x-praxis-ai-format
+          model: x-praxis-ai-model
+          stream: x-praxis-ai-stream
+
+      - filter: openai_responses_validate
+
+      - filter: openai_tool_parse
+
+      - filter: openai_response_store
+        backend: sqlite
+        database_url: "sqlite://responses.db?mode=rwc"
+        responses_table: openai_responses
+        conversations_table: openai_conversations
+
+      - filter: openai_responses_rehydrate
+
+      - filter: openai_mcp_tool_resolve
+        allow_loopback: true
+
+      - filter: iterative_request_router
+        initial_step: inference
+        max_iterations: 11
+        timeout_ms: 120000
+        step_timeout_ms: 120000
+        max_stream_response_bytes: 67108864
+        steps:
+          - name: inference
+            filters:
+              # Parses every inference SSE stream, preserves one logical
+              # response identity across rounds, and withholds per-round
+              # terminal events until the IRR transition is known.
+              # REQUIRED with terminal_streaming below.
+              - filter: openai_stream_events
+                logical_stream: true
+
+              # Runs first on request re-entry to execute pending web
+              # searches, and last on the model response to detect
+              # web_search_call items.
+              - filter: openai_web_search
+                provider: tavily
+                api_key: ${TAVILY_API_KEY}
+
+              # Runs second on re-entry to execute pending MCP calls,
+              # and second-to-last on the model response to classify
+              # MCP tool calls.
+              - filter: openai_mcp_dispatch
+                allow_loopback: true
+
+              - filter: openai_agentic_loop
+                max_infer_iters: 10
+
+              - filter: openai_responses_proxy
+                terminal_streaming: true
+
+              - filter: router
+                routes:
+                  - path_prefix: "/"
+                    cluster: "inference-backend"
+
+              - filter: load_balancer
+                clusters:
+                  - name: "inference-backend"
+                    endpoints:
+                      - "127.0.0.1:8000"
+                    read_timeout_ms: 120000
+            on_result:
+              - filter: openai_mcp_dispatch
+                key: action
+                value: loop
+                next: inference
+              - filter: openai_web_search
+                key: action
+                value: loop
+                next: inference
+              - default: true
+                done: true
+
+insecure_options:
+  allow_private_endpoints: true # example proxies to local backends

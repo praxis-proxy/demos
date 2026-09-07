@@ -19,6 +19,7 @@ Each demo lives under `demos/<name>/` with its own README.
 | [openai-responses-file-resolve](demos/openai-responses-file-resolve/) | File resolution + document extraction — send a `file_id` in a Responses API request, Praxis resolves it via OGX, extracts text content, and converts `input_file` → `input_text` for vLLM. |
 | [openai-responses-agentic-loop](demos/openai-responses-agentic-loop/) | Server-side agentic loop — model calls an MCP tool, Praxis dispatches to the MCP server and loops the result back to the model for a final answer. No client-side orchestration needed. |
 | [openai-responses-file-search](demos/openai-responses-file-search/) | Server-side file search — model calls file_search, Praxis dispatches to OGX's vector store search API, loops back with ranked results, and the model answers grounded in retrieved documents. |
+| [openai-responses-streaming-agentic-loop](demos/openai-responses-streaming-agentic-loop/) | Streaming agentic loop — one logical SSE stream preserved across multiple IRR rounds. Model calls a tool mid-stream (web search or MCP), Praxis withholds the terminal event, dispatches, and streams the final answer — `response.created` and `response.completed` each appear exactly once. |
 | [skillberry-agent-proxy](demos/skillberry-agent-proxy/) | A fully automated demo of Praxis as an agentic gateway for the Skillberry Agent platform, based on [skillberry-agent-praxis-poc](https://github.com/skillberry-ai/skillberry-agent-praxis-poc) |
 
 ## Grid QuickStarts
