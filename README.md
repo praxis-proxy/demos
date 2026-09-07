@@ -35,6 +35,7 @@ runtime assertions. Each demo requires a local
 | [grid-workload-inference](demos/grid-workload-inference/) | Cluster-local workload entry without public ingress |
 | [grid-llmd-pool-metrics](demos/grid-llmd-pool-metrics/) | EPP telemetry, Grid scoring, A-to-B-to-A capacity failover |
 | [grid-combined-site](demos/grid-combined-site/) | Consumer and secured provider roles colocated at each site |
+| [grid-distributed-quota](demos/grid-distributed-quota/) | Identity-scoped token budgets shared across gateways and regions; reservation-cap enforcement with Grid round-robin routing (requires a feature-enabled gateway image) |
 
 ## Grid Labs and Guides
 
