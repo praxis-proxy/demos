@@ -5,6 +5,12 @@
 ## Setup
 
 ```
+# Render configs (defaults to a placeholder vLLM endpoint -- set VLLM_ENDPOINT
+# to point at a real one)
+export VLLM_ENDPOINT="${VLLM_ENDPOINT:-10.0.0.99:8000}"
+envsubst < passthrough.yaml.tmpl > passthrough.yaml
+envsubst < transform.yaml.tmpl > transform.yaml
+
 # Terminal 1 (Praxis logs)
 RUST_LOG=praxis_filter=debug cargo run -p praxis-proxy --release -- -c passthrough.yaml 2>&1 \
   | grep -E 'classified|validation|route matched|upstream selected|credential|transformed|streaming'
