@@ -1,9 +1,9 @@
 # == Policy document ==
-plugin_settings:
-  routing_enabled: true
 plugins:
 - name: keycloak-jwt
   kind: identity/jwt
+  capabilities:
+  - perform_http
   hooks:
   - identity.resolve
   on_error: fail
@@ -12,6 +12,7 @@ plugins:
     header: Authorization
     trusted_issuers:
     - issuer: https://keycloak.example.com/realms/myrealm
+      skip_audience_validation: true
       algorithms:
       - RS256
       decoding_key:
@@ -38,7 +39,7 @@ config_path: /etc/praxis/jwt-rbac-policy-doc.yaml
 # == Coverage report ==
 AuthPolicy → Praxis coverage report
 ===================================
-translated: 4   approximated: 4   skipped: 1
+translated: 5   approximated: 4   skipped: 1
 
 [INFO ] skipped       spec.targetRef
           Gateway API binding is not translated; wire the emitted filter block into a Praxis chain manually.
@@ -46,6 +47,10 @@ translated: 4   approximated: 4   skipped: 1
           JWT → identity/jwt (role: user; algorithms default to RS256 — widen in the emitted policy if the IdP signs with ES256/etc.).
 [WARN ] approximated  authentication/keycloak-jwt
           issuerUrl maps to OIDC discovery, which the engine's identity/jwt does not perform; set decoding_key.url to the IdP's JWKS endpoint.
+[INFO ] translated    authentication/keycloak-jwt
+          a Kuadrant JWT block cannot express an audience, so the emitted issuer sets skip_audience_validation: true, which is the same `aud` posture as before. Narrow it by listing the audiences the IdP mints for this gateway.
+[INFO ] translated    spec.when
+          policy activation condition folded into the global policy steps.
 [INFO ] translated    authorization/members-can-read
           patternMatching → CEL PDP step (`cel: { expr }`).
 [INFO ] translated    authorization/writes-need-admin
@@ -56,5 +61,3 @@ translated: 4   approximated: 4   skipped: 1
           custom unauthenticated denyWith (status/body/headers) is not carried; identity failure returns a default 401 until Phase B (U2/U7).
 [WARN ] approximated  response.unauthorized
           custom unauthorized denyWith (status/body/headers) is not carried; authz denial uses a default status until Phase B (U2/U7).
-[INFO ] translated    spec.when
-          policy activation condition folded into the global policy steps.

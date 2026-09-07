@@ -1,9 +1,9 @@
 # == Policy document ==
-plugin_settings:
-  routing_enabled: true
 plugins:
 - name: keycloak-jwt
   kind: identity/jwt
+  capabilities:
+  - perform_http
   hooks:
   - identity.resolve
   on_error: fail
@@ -12,22 +12,39 @@ plugins:
     header: Authorization
     trusted_issuers:
     - issuer: http://localhost:8081/realms/policy-demo
+      skip_audience_validation: true
       algorithms:
       - RS256
       decoding_key:
         kind: jwks_url
         url: http://localhost:8081/realms/policy-demo/protocol/openid-connect/certs
     claim_mapper: standard
+routes:
+- http:
+    path_prefix: /api
+    method:
+    - GET
+  authorization:
+    pre_invocation:
+    - cel:
+        expr: ((has(perm.tool_execute) && perm.tool_execute))
+- http:
+    path_prefix: /api
+    method:
+    - POST
+    - DELETE
+  authorization:
+    pre_invocation:
+    - cel:
+        expr: ((has(role.hr) && role.hr))
+- http:
+    path_prefix: /
 global:
   authentication:
   - keycloak-jwt
   authorization:
     pre_invocation:
     - require(authenticated)
-    - cel:
-        expr: '!((http.path.startsWith(''/api''))) || (!((http.method == ''GET'')) || (((has(perm.tool_execute) && perm.tool_execute))))'
-    - cel:
-        expr: '!((http.path.startsWith(''/api''))) || (!(((http.method == ''POST'') || (http.method == ''DELETE''))) || (((has(role.hr) && role.hr))))'
   pdp:
   - kind: cel
 
@@ -38,15 +55,23 @@ config_path: /etc/praxis/jwt-cel-http-policy-doc.yaml
 # == Coverage report ==
 AuthPolicy → Praxis coverage report
 ===================================
-translated: 4   approximated: 0   skipped: 1
+translated: 8   approximated: 0   skipped: 1
 
 [INFO ] skipped       spec.targetRef
           Gateway API binding is not translated; wire the emitted filter block into a Praxis chain manually.
 [INFO ] translated    authentication/keycloak-jwt
           JWT → identity/jwt (role: user; algorithms default to RS256 — widen in the emitted policy if the IdP signs with ES256/etc.).
+[INFO ] translated    authentication/keycloak-jwt
+          a Kuadrant JWT block cannot express an audience, so the emitted issuer sets skip_audience_validation: true, which is the same `aud` posture as before. Narrow it by listing the audiences the IdP mints for this gateway.
+[INFO ] translated    spec.when
+          policy activation condition folded into the global policy steps.
+[INFO ] translated    spec.when
+          path activation → `http:` route selector (path_prefix: /api).
+[INFO ] translated    authorization/reads-need-tool-execute
+          rule `when` → `http:` route selector (method: GET).
 [INFO ] translated    authorization/reads-need-tool-execute
           patternMatching → CEL PDP step (`cel: { expr }`).
 [INFO ] translated    authorization/writes-need-hr
+          rule `when` → `http:` route selector (method: POST, DELETE).
+[INFO ] translated    authorization/writes-need-hr
           patternMatching → CEL PDP step (`cel: { expr }`).
-[INFO ] translated    spec.when
-          policy activation condition folded into the global policy steps.

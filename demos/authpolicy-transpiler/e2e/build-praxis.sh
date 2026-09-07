@@ -32,7 +32,7 @@ DEFAULT_GIT_URL="https://github.com/praxis-proxy/praxis.git"
 # so tracking a branch means the demo can break with no change here. This is
 # praxis main @ #943 (the Praxis Policy Engine port), verified with this demo.
 # PRAXIS_GIT_REF=main opts back into tracking.
-DEFAULT_GIT_REF="c9c2a46898ebd47f58cffde5865f9e976078fa6e"
+DEFAULT_GIT_REF="38ff3e7b58fe295e93d2f4c3ad20a4a29337fa2f"
 # This script lives at demos/authpolicy-transpiler/e2e/, so a praxis checkout
 # sitting beside praxis-demos/ is four levels up.
 SIBLING="../../../../praxis"

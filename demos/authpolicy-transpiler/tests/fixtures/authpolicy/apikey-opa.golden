@@ -1,6 +1,4 @@
 # == Policy document ==
-plugin_settings:
-  routing_enabled: true
 plugins: []
 global:
   authorization:

@@ -21,15 +21,32 @@ use serde::Serialize;
 /// points at).
 #[derive(Debug, Serialize)]
 pub(crate) struct PolicyDoc {
-    pub plugin_settings: PluginSettings,
     pub plugins: Vec<PluginEntry>,
+    /// `http:` routes, one per request shape the policy scopes a rule to.
+    /// Emitted before `global:` so the file reads selector-first.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<RouteOut>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub global: Option<GlobalOut>,
 }
 
+/// One `http:` route. The selector carries the request shape a Kuadrant `when`
+/// expressed as a predicate, so the rule under it is only its own condition.
 #[derive(Debug, Serialize)]
-pub(crate) struct PluginSettings {
-    pub routing_enabled: bool,
+pub(crate) struct RouteOut {
+    pub http: HttpSelector,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authorization: Option<AuthorizationOut>,
+}
+
+/// An `http:` route selector. A segment-boundary prefix, optionally narrowed by
+/// method. Exact paths outrank prefixes and longer prefixes outrank shorter
+/// ones, so the catch-all never shadows a scoped route.
+#[derive(Debug, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct HttpSelector {
+    pub path_prefix: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub method: Vec<String>,
 }
 
 /// One engine plugin entry. Only `identity/jwt` is emitted this iteration.
@@ -37,6 +54,11 @@ pub(crate) struct PluginSettings {
 pub(crate) struct PluginEntry {
     pub name: String,
     pub kind: String,
+    /// `perform_http` when the plugin fetches a JWKS. The engine refuses to
+    /// start without it, because withholding it must stop the call rather than
+    /// let the plugin skip its IdP check and fail open.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<String>,
     pub hooks: Vec<String>,
     /// `fail` so a bad/missing credential denies (fail-closed identity).
     pub on_error: String,
@@ -60,6 +82,10 @@ pub(crate) struct TrustedIssuer {
     pub issuer: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub audiences: Vec<String>,
+    /// An AuthPolicy JWT block carries no audience, and the engine refuses an
+    /// issuer that lists none without this flag set.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub skip_audience_validation: bool,
     /// Never empty — explicit algorithm pinning (plan R21).
     pub algorithms: Vec<String>,
     pub decoding_key: DecodingKey,
@@ -77,7 +103,7 @@ pub(crate) enum DecodingKey {
 /// authorization policy belongs. Emitted in the **canonical block form**
 /// (`authentication:` + `authorization:` directly under `global:`, no `apl:`
 /// wrapper). The engine evaluates this policy for entity-less HTTP requests via the
-/// `cmf.http_request` hook.
+/// `http.request` hook.
 #[derive(Debug, Serialize)]
 pub(crate) struct GlobalOut {
     /// Identity dispatch list (names of the `identity/jwt` plugins declared
