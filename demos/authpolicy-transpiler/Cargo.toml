@@ -3,7 +3,7 @@ name = "authpolicy-transpiler"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.96"
-license = "MIT"
+license = "Apache-2.0"
 publish = false
 description = "Offline CLI that transpiles a Kuadrant AuthPolicy into Praxis policy-filter + policy-document config (demo)."
 

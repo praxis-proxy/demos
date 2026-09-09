@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2024 Praxis Contributors
 
 //! Serde model for the supported subset of the Kuadrant `AuthPolicy`
