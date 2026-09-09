@@ -3,6 +3,8 @@
 Runnable, self-contained demos and setups for [Praxis](https://github.com/praxis-proxy/praxis).
 Each demo lives under `demos/<name>/` with its own README.
 
+See also [experimental builds](https://github.com/praxis-proxy/experimental).
+
 ## Demos
 
 | Demo | Description |
