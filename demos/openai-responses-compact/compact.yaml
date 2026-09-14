@@ -1,0 +1,78 @@
+# Compact Filter Demo
+#
+# Summarizes conversation history once it exceeds a token threshold.
+# Turn 1 is stored in SQLite. On turn 2 the client sends only
+# `previous_response_id` plus a `compaction` context_management block;
+# Praxis rehydrates the stored history, and when the token count crosses
+# `compact_threshold` the openai_responses_compact filter calls the
+# inference backend to summarize the prior turns before forwarding the
+# current turn. The explicit POST /v1/responses/compact endpoint returns
+# a response.compaction object directly.
+#
+# Security: StreamBuffer body callouts run before this listener's
+# header-phase filters, so the compact filter requires
+# allow_pre_security_callout. Deploy behind an outer auth boundary.
+#
+# Usage:
+#   praxis-ai -c compact.yaml
+#
+# Requires an OpenAI-compatible backend on :11434 (Ollama) that serves
+# both the main /v1/responses inference and the /v1/chat/completions
+# summarization callout.
+
+listeners:
+  - name: gateway
+    address: "127.0.0.1:8080"
+    filter_chains: [compact-pipeline]
+
+filter_chains:
+  - name: compact-pipeline
+    filters:
+      - filter: openai_responses_format
+        on_invalid: reject
+        headers:
+          format: x-praxis-ai-format
+          model: x-praxis-ai-model
+          stream: x-praxis-ai-stream
+          mode: x-praxis-responses-mode
+
+      - filter: openai_responses_validate
+
+      - filter: openai_response_store
+        backend: sqlite
+        database_url: "sqlite://responses.db?mode=rwc"
+        responses_table: openai_responses
+        conversations_table: openai_conversations
+
+      - filter: openai_stream_events
+
+      - filter: openai_responses_rehydrate
+
+      - filter: openai_responses_compact
+        # Anonymous summarization callout; no downstream/cluster auth
+        # headers are forwarded on this direct inference call.
+        allow_pre_security_callout: true
+        inference_url: "http://localhost:11434/v1/chat/completions"
+        allow_private_inference_url: true
+        default_model: llama3.2:1b
+        # Ollama on CPU is slow to summarize; give the callout headroom.
+        timeout_ms: 120000
+
+      - filter: openai_responses_proxy
+        name: inference
+
+      - filter: router
+        routes:
+          - path: "/v1/responses"
+            headers:
+              x-praxis-ai-format: "openai_responses"
+            cluster: "inference-backend"
+
+      - filter: load_balancer
+        clusters:
+          - name: "inference-backend"
+            endpoints:
+              - "127.0.0.1:11434"
+
+insecure_options:
+  allow_private_endpoints: true # demo proxies to a local backend
