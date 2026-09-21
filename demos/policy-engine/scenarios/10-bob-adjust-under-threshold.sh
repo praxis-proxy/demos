@@ -19,11 +19,22 @@ set -euo pipefail
 source "$(dirname "$0")/_lib.sh"
 
 step "Bob (HR) → adjust_compensation (+\$5,000, under the \$10k threshold)"
-note "Expected: HTTP 200 + status \"applied\" — require(role.hr) ✓"
+note "require(role.hr) ✓"
 note "Under \$10k, so the when: args.amount > 10000 guard does NOT fire — no approval"
 
 BOB=$(mint bob)
 CLIENT=$(mint hr-copilot)
 
+reset_upstream
 call_adjust_compensation "$BOB" "$CLIENT" 5000
+
+expect_status 200
+expect_rpc_ok
+# No elicitation: the raise applies on the first call, with no approval round.
+expect_no_violation
+expect_result_field status applied
+expect_upstream_calls 1
+
 show_last_audit adjust_compensation
+expect_audit_record adjust_compensation
+finish

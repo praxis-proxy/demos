@@ -30,20 +30,39 @@ set -euo pipefail
 source "$(dirname "$0")/_lib.sh"
 
 step "Bob (HR) → get_compensation, with assertions on the upstream request"
-note "Expected: 200 OK"
-note "Expected upstream: x-auth-user-id / x-auth-username / x-auth-roles / x-auth-context"
-note "Expected upstream: NO x-user-token — the contract strips it"
+note "global.assertions.request renders identity into headers the tool can read"
 
 BOB=$(mint bob)
 CLIENT=$(mint hr-copilot)
+BOB_SUB="$(token_sub "$BOB")"
+note "Bob's real subject id: $BOB_SUB"
 
+reset_upstream
 call_get_compensation "$BOB" "$CLIENT" true
+
+expect_status 200
+expect_upstream_calls 1
+# The engine originates each of these. The upstream believes them because it
+# believes the network path, so what matters is that they are the engine's
+# values.
+expect_upstream_header x-auth-user-id "$BOB_SUB"
+expect_upstream_header x-auth-username bob
+expect_upstream_header x-auth-roles hr
+# And the raw caller token is withheld: `delegate(...)` already replaced
+# `authorization`, so forwarding this too would hand the tool a second,
+# more powerful credential.
+expect_upstream_no_header x-user-token
 
 step "The same call, with Bob spoofing an asserted header"
 note "Sending: x-auth-user-id: root"
-note "Expected upstream: x-auth-user-id is still Bob's real subject id, not 'root'"
+note "An assertion entry removes its target before injecting, so the client's"
+note "value cannot survive into the upstream request."
 
+reset_upstream
 SPOOF_HEADER="x-auth-user-id: root" call_get_compensation "$BOB" "$CLIENT" true
 
-step "Read the upstream's view"
-note "docker compose logs --tail 40 hr-mcp | grep x-auth"
+expect_status 200
+expect_upstream_calls 1
+# The header Bob set himself must not be what the tool reads.
+expect_upstream_header x-auth-user-id "$BOB_SUB"
+finish

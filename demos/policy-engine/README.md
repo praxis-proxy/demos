@@ -131,18 +131,26 @@ Human-in-the-loop approval adds a second, **out-of-band** path for
 
 - Docker daemon running (Docker Desktop, Rancher Desktop, or Colima)
 - Rust toolchain (whatever praxis's `rust-version` requires)
+- `jq` and `curl`, used by the scenarios and their assertions
 - Ports `8081`, `8090`, `9100`, `6379`, `5001` free on localhost
 
 ## Quick start
 
-`restart.sh` builds praxis if needed, brings up a clean Keycloak and MCP backend,
-starts the gateway, and smoke-tests scenario 01. The whole demo is one command:
+`restart.sh` builds the gateway if needed, brings up a clean Keycloak and MCP
+backend, starts the gateway, and smoke-tests scenario 01. The whole demo is one
+command:
 
 ```bash
-# From this directory. First run clones praxis and builds the gateway
-# (~5 min cold, ~30s warm).
+# From this directory. First run builds the gateway (~5 min cold, ~30s warm).
 ./restart.sh
 ./walkthrough.sh
+```
+
+To check every scenario instead of watching the tour:
+
+```bash
+./run-scenarios.sh                 # the running gateway
+./run-scenarios.sh --all-configs   # Cedar, then CEL, then OPA
 ```
 
 The equivalent steps, spelled out:
@@ -155,70 +163,72 @@ docker compose up -d                  # Keycloak + mock MCP server + valkey
 ./walkthrough.sh                      # narrated tour of the core scenarios
 ```
 
-## Configuring the gateway / praxis source
+## Configuring the gateway
 
 The gateway is a thin crate (`gateway/`) that composes **praxis-ai**'s AI filters
-(the `mcp` protocol classifier) with praxis's **`policy`** filter: it depends on
-praxis-ai's server and enables the `policy-engine` feature, which registers
-`policy`. Both filters register themselves, so there is no manual wiring.
+(the `mcp` protocol classifier) with praxis's **`policy`** filter. Both filters
+register themselves, so there is no manual wiring.
 
-`gateway/Cargo.toml` also `[patch]`es `praxis-proxy-*` to a praxis checkout in the
-gitignored `gateway/.praxis`, and the policy engine's crates to a second checkout
-in `gateway/.policy`. Neither is a fork: no *published* praxis version carries the
-`policy-engine` feature, and the engine's two reference plugins are unpublished,
-so the demo builds both from source.
+Since **praxis 0.6.0** the published `praxis-proxy-filter` carries
+`policy-engine` in its default features, so praxis comes from crates.io and
+there is no praxis checkout to resolve. The `[patch]` block in
+`gateway/Cargo.toml` is down to two jobs:
 
-The engine needs its own `[patch]` entries here rather than inheriting praxis's,
-because cargo honours `[patch]` only in the workspace root it is building. Every
-engine crate is listed, not just the facade: leaving one out resolves that crate
-from crates.io and the graph ends up with two copies of it, which for
-`praxis-policy-core` means two `PluginFactory` traits and the host registration in
-`main.rs` stops compiling.
+* the engine's `praxis-policy-core` and `praxis-policy-orchestration`, so the
+  two unpublished reference plugins and the published engine share one copy of
+  each. Two copies of `praxis-policy-core` means two `PluginFactory` traits and
+  the host registration in `main.rs` stops compiling.
+* praxis-ai pins praxis by git rev, which `[patch.crates-io]` cannot reach, so a
+  second `[patch]` redirects that source to the published version. Without it
+  the graph holds praxis twice.
 
-`build-gateway.sh` resolves both, first match wins:
+One checkout is still needed, at `gateway/.policy`, because the reference
+plugins are unpublished. `build-gateway.sh` resolves it, first match wins:
 
 | Source | Effect |
 |---|---|
-| `PRAXIS_DIR=<path>` | Symlinks a local praxis checkout as `gateway/.praxis`. |
-| an existing `gateway/.praxis` | Reused as-is, never fetched into. |
-| default | Clones `PRAXIS_GIT_URL` (upstream praxis) at `PRAXIS_GIT_REF`, which defaults to a **pinned commit**, not a branch. |
+| `PPE_DIR=<path>` | Symlinks a local praxis-policy checkout. |
+| an existing `gateway/.policy` | Reused as-is, never fetched into. |
+| a sibling `praxis-policy` | Used when there is one. |
+| default | Clones `PPE_GIT_URL` at `PPE_GIT_REF`, the tag in `DEFAULT_PPE_REF`. |
 
-`gateway/.policy` is usually not a second thing to point at: a sibling
-`praxis-policy` next to whatever `.praxis` resolved to is used when there is one,
-so working on both at once means pointing at one. `PPE_DIR` overrides it, and a
-clone of `PPE_GIT_URL` at `PPE_GIT_REF` is the fallback, which is what a fresh
-checkout gets.
+Keep that checkout on the tag matching the engine release praxis depends on. A
+checkout on some other branch links its `praxis-policy-core` against the
+published rest of the engine.
 
 ```bash
-# Nothing to set — clones upstream praxis at the pinned commit:
-./restart.sh
-
-# Against a local checkout:
-PRAXIS_DIR=~/src/praxis ./restart.sh
-
-# Against a specific ref — a branch, tag or commit:
-PRAXIS_GIT_REF=main ./restart.sh      # track the branch instead of the pin
-PRAXIS_GIT_REF=v0.6.0 ./restart.sh
-
-# GATEWAY_PROFILE=debug for a faster build; GATEWAY_BIN=<path> to skip building.
+./restart.sh                                  # nothing to set
+PPE_DIR=~/src/praxis-policy ./restart.sh      # against a local engine checkout
+GATEWAY_PROFILE=debug ./restart.sh            # faster build
+GATEWAY_BIN=<path> ./restart.sh               # skip building
 ```
 
-All three upstreams are pinned so a demo run is reproducible: praxis to the commit
-in `build-gateway.sh`'s `DEFAULT_PRAXIS_REF`, the engine to `DEFAULT_PPE_REF`
-beside it, and praxis-ai to the `rev` in `gateway/Cargo.toml`. praxis and the
-engine are one change split across two repos, so bump that pair together: a
-mismatched pair fails to compile rather than misbehaving quietly. Building praxis from a moving branch meant the demo could
-break with nothing here changing, which is exactly what happened when praxis
-changed an admin-endpoint signature under the pinned praxis-ai. Bump either pin
-deliberately, and re-run the scenarios when you do.
+Both upstreams are pinned so a run is reproducible: the engine to
+`DEFAULT_PPE_REF` in `build-gateway.sh`, praxis-ai to the `rev` in
+`gateway/Cargo.toml`, and praxis to the `praxis-proxy-*` version beside it.
+praxis and the engine are one change split across two repos, so bump that pair
+together. praxis-ai needs bumping alongside praxis whenever the two disagree on
+the pingora fork or on a feature gate: praxis 0.6.0 moved several items behind
+`chain-binding`, which is why the gateway enables it.
 
-> Once a praxis release carries `policy-engine`, drop the `[patch]` in
-> `gateway/Cargo.toml` and the gateway builds against published praxis directly.
+`build-gateway.sh` checks the resolved graph before and after building, and
+fails with the drifted pin named rather than letting the mismatch surface as a
+type error deep in a cargo build. A stale `Cargo.lock` is the common case and it
+heals that one itself by regenerating.
 
 ## Scenarios
 
 Twelve scenarios cover every feature in the filter. Run any one directly, for
-example `./scenarios/01-bob-allow.sh`.
+example `./scenarios/01-bob-allow.sh`, or all of them with `./run-scenarios.sh`.
+
+Each scenario checks its own expectations and exits non-zero when one is not
+met. The line a scenario prints is the assertion it just made, so a claim in the
+output cannot drift away from what the gateway actually does. That includes what
+reached the tool: the mock MCP server records inbound requests and serves them
+from `/_requests`, which is how a scenario checks that a denied call never left
+the gateway, that `delegate(...)` really swapped the token, that `redact(...)`
+rewrote the request body, and that an asserted header carries the engine's value
+rather than one the caller sent.
 
 | # | Scenario | Demonstrates |
 |---|----------|---|
@@ -515,8 +525,9 @@ deny / redact paths.
   and check `docker compose logs -f auth-channel`; the gateway log is `./gateway.log`.
 - **Token expired during a long pause.** CIBA requests expire after ~120s by realm
   policy; in the chat, type `relogin` to mint fresh tokens.
-- **Gateway will not build.** It compiles praxis from source into
-  `gateway/.praxis`; see [Configuring the gateway / praxis source](#configuring-the-gateway--praxis-source).
+- **Gateway will not build.** `build-gateway.sh` checks the dependency graph and
+  names the drifted pin; see [Configuring the gateway](#configuring-the-gateway).
+  A duplicated crate there means the praxis, praxis-ai and engine pins disagree.
 
 ## Notes
 
@@ -557,14 +568,15 @@ the padding, so the wire stays correct. This is documented in the filter source.
 | `policy-opa.yaml` | OPA variant: a Rego module under `pdp:`, queried by `search_repos` with `opa: { query }` |
 | `docker-compose.yml` | Keycloak (8081), hr-mcp (9100), valkey (6379), and auth-channel (5001) |
 | `keycloak/realm-export.json` | Realm with users, clients, STE v2, and CIBA + the channel SPI |
-| `hr-mcp-server/` | Python mock MCP server (Dockerfile and `server.py`), incl. `adjust_compensation` |
+| `hr-mcp-server/` | Python mock MCP server (Dockerfile and `server.py`), incl. `adjust_compensation` and the `/_requests` recorder the scenarios assert against |
 | `auth-channel/` | CIBA approval UI (`:5001`, "the manager's phone") for Approve / Deny; dev `/pending` + `/approve` API for scripted approval |
-| `scenarios/*.sh` | The twelve scenarios (08/09 session taint, 10/11 manager approval, 12 assertions) and `_lib.sh` helpers |
+| `scenarios/*.sh` | The twelve scenarios (08/09 session taint, 10/11 manager approval, 12 assertions) and `_lib.sh` helpers plus its `expect_*` assertions |
+| `run-scenarios.sh` | Run every scenario, optionally across all three PDP configs, and report pass/fail |
 | `mint-token.sh` | Mint a user or client token via Keycloak |
 | `verify-token-exchange.sh` | Check that STE v2 is configured correctly |
 | `walkthrough.sh` | Narrated tour of the core scenarios |
 | `restart.sh` | Tear down, bring up, and smoke-test the demo |
-| `build-gateway.sh` | Build the gateway from `gateway/` (see "Configuring the gateway / praxis source") |
+| `build-gateway.sh` | Build the gateway from `gateway/`, checking the dependency graph first (see "Configuring the gateway") |
 | `gateway/` | Thin binary composing praxis-ai's AI filters + praxis's `policy` filter |
 | `agent/` | Optional Python chat agent for an LLM-driven demo (incl. the manager-approval walkthrough) |
 

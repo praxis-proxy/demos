@@ -31,17 +31,28 @@ SID_TAINT="taint-$$-${RANDOM}"
 
 step "S1 · Bob → send_email (untainted session, clean body)"
 note "Session: $SID_CLEAN (never touched secret data)"
-note "Expected: 200 OK — require(perm.email_send) ✓, pii-scan ✓, session clean"
+note "require(perm.email_send) ✓, pii-scan ✓, session clean"
+reset_upstream
 SESSION_ID="$SID_CLEAN" call_send_email "$BOB" "$CLIENT"
+expect_status 200
+expect_rpc_ok
+expect_upstream_calls 1
 
 step "S2 · Bob → get_compensation (taints the session)"
 note "Session: $SID_TAINT"
-note "Expected: 200 OK — and the policy's taint(secret, session) marks this session"
+note "The policy's taint(secret, session) marks this session"
 SESSION_ID="$SID_TAINT" call_get_compensation "$BOB" "$CLIENT" true
+expect_status 200
+expect_rpc_ok
 
 step "S3 · Bob → send_email (SAME session as S2, clean body)"
 note "Session: $SID_TAINT (now carries label \"secret\" from S2)"
-note "Expected: HTTP 200 + JSON-RPC error -32001, violation=session_tainted_secret"
 note "Denied by the SESSION taint — NOT by pii-scan (the body is clean)"
 note "This is the cross-tool data-flow control: read secrets → can't email out"
+reset_upstream
 SESSION_ID="$SID_TAINT" call_send_email "$BOB" "$CLIENT"
+expect_status 200
+expect_rpc_error -32001
+expect_violation session_tainted_secret
+expect_upstream_calls 0
+finish

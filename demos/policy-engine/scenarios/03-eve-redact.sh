@@ -16,11 +16,18 @@ set -euo pipefail
 source "$(dirname "$0")/_lib.sh"
 
 step "Eve (HR, no view_ssn) → get_compensation (include_ssn=true)"
-note "Expected: 200 OK"
-note "Expected upstream:    args.ssn   = '[REDACTED]' (gateway rewrote the REQUEST body)"
-note "Expected client view: result.ssn = '[REDACTED]' (gateway rewrote the RESPONSE body)"
 
 EVE=$(mint eve)
 CLIENT=$(mint hr-copilot)
 
+reset_upstream
 call_get_compensation "$EVE" "$CLIENT" true
+
+expect_status 200
+expect_rpc_ok
+expect_upstream_calls 1
+# Both directions. The tool never receives the SSN, and the client never sees
+# it come back, which are two separate rewrites.
+expect_upstream_arg ssn "[REDACTED]"
+expect_result_field ssn "[REDACTED]"
+finish

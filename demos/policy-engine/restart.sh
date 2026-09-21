@@ -69,16 +69,26 @@ step "stopping any existing gateway on :8090"
 if pids=$(lsof -ti :8090 2>/dev/null); then
   # shellcheck disable=SC2086
   kill $pids 2>/dev/null || true
-  # Wait up to 5s for the port to free.
-  for _ in 1 2 3 4 5; do
-    lsof -i :8090 >/dev/null 2>&1 || break
+  # Wait for the processes to actually exit, not just for the port to free.
+  # pingora shuts down gracefully, and a gateway that has released :8090 can
+  # still be running for several seconds. Starting the next one then means two
+  # processes writing to $GATEWAY_LOG at independent offsets, which silently
+  # loses lines from the new gateway and leaves the old one's shutdown messages
+  # at the end of a log that claims to be the new one's.
+  still_alive() {
+    local p
+    for p in $pids; do kill -0 "$p" 2>/dev/null && return 0; done
+    return 1
+  }
+  for _ in $(seq 1 15); do
+    still_alive || break
     sleep 1
   done
-  if lsof -i :8090 >/dev/null 2>&1; then
-    warn "port :8090 still bound — kill -9 fallback"
+  if still_alive; then
+    warn "gateway still running after 15s — kill -9 fallback"
     # shellcheck disable=SC2086
     kill -9 $pids 2>/dev/null || true
-    sleep 1
+    for _ in 1 2 3; do still_alive || break; sleep 1; done
   fi
   ok "freed :8090"
 else

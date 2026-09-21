@@ -13,11 +13,16 @@ set -euo pipefail
 source "$(dirname "$0")/_lib.sh"
 
 step "Alice (engineer) → get_compensation"
-note "Expected: HTTP 200 + JSON-RPC error -32001, violation=routes.tool:get_compensation.apl.pre_invocation[0]"
 note "Triggered by: require(role.hr) deny BEFORE delegation runs"
-note "Expected upstream: no inbound request (gateway short-circuited)"
 
 ALICE=$(mint alice)
 CLIENT=$(mint hr-copilot)
 
+reset_upstream
 call_get_compensation "$ALICE" "$CLIENT" false
+
+expect_status 200
+expect_rpc_error -32001
+expect_violation "routes.tool:get_compensation.pre_invocation[0]"
+expect_upstream_calls 0
+finish
