@@ -21,23 +21,17 @@ set -euo pipefail
 source "$(dirname "$0")/_lib.sh"
 
 step "Alice (engineering) → search_repos(repo_name='web-app', visibility='internal')"
-note "Expected: 200 OK"
-note "Expected upstream: Authorization = minted github-api token"
-note "                  permissions claim includes repo:read:internal"
 
 ALICE=$(mint alice)
 CLIENT=$(mint hr-copilot)
 
-curl -s -X POST "$GATEWAY/mcp" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $CLIENT" \
-  -H "X-User-Token: $ALICE" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "tools/call",
-    "params": {
-      "name": "search_repos",
-      "arguments": { "repo_name": "web-app", "visibility": "internal" }
-    }
-  }' | jq . 2>/dev/null || true
+reset_upstream
+call_search_repos "$ALICE" "$CLIENT" internal web-app
+
+expect_status 200
+expect_rpc_ok
+expect_no_violation
+expect_upstream_calls 1
+# A different tool, so a different audience: the exchange is per-route.
+expect_upstream_audience github-api
+finish

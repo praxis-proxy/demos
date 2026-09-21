@@ -14,11 +14,21 @@ set -euo pipefail
 source "$(dirname "$0")/_lib.sh"
 
 step "Bob (HR) → get_compensation (include_ssn=true)"
-note "Expected: 200 OK"
-note "Expected upstream: Authorization is the IdP-minted workday-api token (NOT bob's user JWT)"
-note "Expected upstream: args.ssn intact ('would-be-removed-if-redact-fires')"
 
 BOB=$(mint bob)
 CLIENT=$(mint hr-copilot)
 
+reset_upstream
 call_get_compensation "$BOB" "$CLIENT" true
+
+expect_status 200
+expect_rpc_ok
+expect_no_violation
+expect_upstream_calls 1
+# The delegation story: the tool is handed an IdP-minted token for its own
+# audience, never Bob's.
+expect_upstream_audience workday-api
+expect_upstream_no_header x-user-token
+# Bob has perm.view_ssn, so nothing redacts on the way in.
+expect_upstream_arg ssn "would-be-removed-if-redact-fires"
+finish

@@ -50,11 +50,17 @@ fi
 
 # --- S1 · the sensitive ask -----------------------------------------------
 step "S1 · Bob (HR) → adjust_compensation (+\$$AMOUNT, over the \$10k threshold)"
-note "Expected: HTTP 200 + JSON-RPC error -32120 (pending) — NOT a deny"
 note "The gateway requested $APPROVER's out-of-band approval and suspended the call"
 
+reset_upstream
 RAW=$(_post_tool "$BOB" "$CLIENT" "$(adjust_compensation_body "$AMOUNT" "$EMPLOYEE")")
 _print_response "$RAW"
+
+expect_status 200
+# Suspended, not denied. The distinction is the whole point of the flow.
+expect_rpc_error -32120
+expect_violation elicitation.pending
+expect_upstream_calls 0
 BODY=$(_http_body "$RAW")
 
 CODE=$(printf '%s' "$BODY" | jq -r '.error.code // empty' 2>/dev/null || true)
@@ -119,7 +125,17 @@ done
 
 # --- S4 · apply ------------------------------------------------------------
 step "S4 · Bob re-sends WITHOUT peek to apply the approved change"
-note "Expected: HTTP 200 + status \"applied\" — the raise lands"
+note "The raise lands"
+reset_upstream
 RAW=$(ELICITATION_ID="$EID" _post_tool "$BOB" "$CLIENT" "$(adjust_compensation_body "$AMOUNT" "$EMPLOYEE")")
 _print_response "$RAW"
+
+expect_status 200
+expect_rpc_ok
+expect_result_field status applied
+# Only now does the tool actually run: the suspended call reached no upstream.
+expect_upstream_calls 1
+
 show_last_audit adjust_compensation
+expect_audit_record adjust_compensation
+finish

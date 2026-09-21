@@ -21,24 +21,18 @@ set -euo pipefail
 source "$(dirname "$0")/_lib.sh"
 
 step "Alice (engineering) → search_repos(visibility='external')"
-note "Expected: HTTP 200 + JSON-RPC error -32001"
-note "Expected violation: cedar.default_deny (Cedar) / cel.policy_denied (CEL) / opa.policy_denied (Rego)"
 note "Triggered by: PDP denies — engineering can't read external repos"
-note "Expected upstream: no inbound request (gateway short-circuits at PDP)"
 
 ALICE=$(mint alice)
 CLIENT=$(mint hr-copilot)
 
-curl -s -X POST "$GATEWAY/mcp" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $CLIENT" \
-  -H "X-User-Token: $ALICE" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "tools/call",
-    "params": {
-      "name": "search_repos",
-      "arguments": { "repo_name": "partner-sdk", "visibility": "external" }
-    }
-  }' -i 2>&1 | head -20
+reset_upstream
+call_search_repos "$ALICE" "$CLIENT" external partner-sdk
+
+expect_status 200
+expect_rpc_error -32001
+# The three PDP configs express the same decision, so the scenario asserts
+# whichever one is running rather than hard-coding Cedar.
+expect_violation "${PDP_DENY_VIOLATION:-cedar.default_deny}"
+expect_upstream_calls 0
+finish

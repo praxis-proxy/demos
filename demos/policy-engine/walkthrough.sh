@@ -107,7 +107,7 @@ pause
 
 beat "Scenario 2 — Alice (engineer, NOT HR) asks for the same."
 beat "Expected: HTTP 200 + JSON-RPC error envelope, code -32001."
-beat "          data.violation = routes.tool:get_compensation.apl.policy[0]"
+beat "          data.violation = routes.tool:get_compensation.pre_invocation[0]"
 beat "Why HTTP 200 + JSON-RPC error (not HTTP 403)? Per MCP's Tools spec,"
 beat "gateway-side denials are reported as JSON-RPC errors so MCP clients"
 beat "can correlate the failure to the original request id."

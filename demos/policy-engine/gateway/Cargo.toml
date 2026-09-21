@@ -12,14 +12,21 @@ name = "policy-engine-gateway"
 path = "src/main.rs"
 
 [dependencies]
-praxis-ai-proxy = { git = "https://github.com/praxis-proxy/ai", rev = "6054d7ef71dc0b02cd32fdd0b62e415fceddfd2c", features = ["praxis-main"] }
-# Declared only to turn on `policy-engine` graph-wide.
-praxis-proxy-filter = { version = "0.5", features = ["policy-engine"] }
-# Likewise for `admin-api`. praxis-ai's server calls the admin-endpoint helpers
-# unconditionally, praxis gates them behind this feature, and praxis-ai declares
-# its praxis dependencies with no features at all. Without this the build fails
-# on `add_admin_endpoints_to_pingora_server` not being found.
-praxis-proxy-protocol = { version = "0.5", features = ["admin-api"] }
+praxis-ai-proxy = { git = "https://github.com/praxis-proxy/ai", rev = "8be05921", features = ["praxis-main"] }
+# Declared to turn features on graph-wide rather than for anything this crate
+# calls. praxis-ai declares its praxis dependencies with no features at all, so
+# whatever it needs has to be enabled by the binary at the root of the graph.
+#
+# `policy-engine` registers the `policy` filter. It is in praxis's default
+# features since 0.6.0, and named here anyway so the dependency is explicit.
+# `chain-binding` gates `DeferredCredential`, `PendingCredentials` and
+# `ChainBindingContext::bind_chain`, which 0.6.0 moved behind a feature and
+# praxis-ai uses. Without it praxis-ai does not compile.
+praxis-proxy-filter = { version = "0.6", features = ["policy-engine", "chain-binding"] }
+# Likewise for `admin-api`: praxis-ai's server calls the admin-endpoint helpers
+# unconditionally and praxis gates them behind this feature. Without it the
+# build fails on `add_admin_endpoints_to_pingora_server` not being found.
+praxis-proxy-protocol = { version = "0.6", features = ["admin-api"] }
 
 # Unpublished reference plugins the demo registers itself, in main.rs. This is
 # the worked example of extending the engine with a plugin it does not bundle.
@@ -36,18 +43,11 @@ tracing = "0.1"
 [target.'cfg(unix)'.dependencies]
 tikv-jemallocator = "0.7"
 
-# No published praxis carries `policy-engine`, so build it from the local
-# checkout `build-gateway.sh` populates at `.praxis/` (gitignored).
-#
-# The paths carry `crates/` because praxis moved core, filter, protocol, tls and
-# server under it. A checkout older than that move does not resolve here.
+# praxis itself is no longer patched. Since 0.6.0 the published
+# `praxis-proxy-filter` carries `policy-engine`, so it resolves from crates.io
+# like any other dependency and the demo needs no praxis checkout.
 [patch.crates-io]
-praxis-proxy-core = { path = ".praxis/crates/core" }
-praxis-proxy-filter = { path = ".praxis/crates/filter" }
-praxis-proxy-protocol = { path = ".praxis/crates/protocol" }
-praxis-proxy-tls = { path = ".praxis/crates/tls" }
-
-# The engine comes from crates.io at 0.2.0, except these two. The reference
+# The engine comes from crates.io too, except these two. The reference
 # plugins above are `publish = false` and read the engine by path, so without
 # the patch the graph holds two copies of each: one by path, one from the
 # registry. Two copies of `praxis-policy-core` means two `PluginFactory` traits,
@@ -61,11 +61,14 @@ praxis-proxy-tls = { path = ".praxis/crates/tls" }
 praxis-policy-core = { path = ".policy/crates/ppe-core" }
 praxis-policy-orchestration = { path = ".policy/crates/ppe-orchestration" }
 
-# praxis-ai pins praxis-proxy-* by git tag, which `[patch.crates-io]` cannot
-# redirect. Without this the AI server registers from the tagged filter, which
-# has no `policy-engine`, and the `policy` filter silently never loads.
-[patch."https://github.com/praxis-proxy/praxis.git"]
-praxis-proxy-core = { path = ".praxis/crates/core" }
-praxis-proxy-filter = { path = ".praxis/crates/filter" }
-praxis-proxy-protocol = { path = ".praxis/crates/protocol" }
-praxis-proxy-tls = { path = ".praxis/crates/tls" }
+# praxis-ai pins praxis-proxy-* by git rev, which `[patch.crates-io]` cannot
+# reach. Left alone the graph holds praxis twice, once from the registry and
+# once from that git source, and the duplicate types stop praxis-ai compiling.
+# Redirect the git source at the published version so there is one copy.
+#
+# Keep these in step with the `praxis-proxy-*` versions above.
+[patch."https://github.com/praxis-proxy/praxis"]
+praxis-proxy-core = { version = "0.6.0" }
+praxis-proxy-filter = { version = "0.6.0" }
+praxis-proxy-protocol = { version = "0.6.0" }
+praxis-proxy-tls = { version = "0.6.0" }

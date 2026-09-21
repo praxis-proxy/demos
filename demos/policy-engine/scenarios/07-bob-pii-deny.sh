@@ -27,10 +27,7 @@ set -euo pipefail
 source "$(dirname "$0")/_lib.sh"
 
 step "Bob (HR + email_send) → send_email with SSN in body"
-note "Expected: HTTP 200 + JSON-RPC error -32001, violation=pii.detected"
 note "Triggered by: pii-scan plugin catches the SSN pattern in args"
-note "Expected: audit-log still emits a record describing the deny"
-note "Expected upstream: no inbound request (gateway plugin denied)"
 
 BOB=$(mint bob)
 CLIENT=$(mint hr-copilot)
@@ -49,6 +46,16 @@ REQUEST_BODY='{
   }
 }'
 
+reset_upstream
 _print_response "$(_post_tool "$BOB" "$CLIENT" "$REQUEST_BODY")"
 
+expect_status 200
+expect_rpc_error -32001
+expect_violation pii.detected
+expect_upstream_calls 0
+
+# A deny is still an event worth recording: the attempt is the interesting
+# part, so the audit trail has to survive the refusal.
 show_last_audit send_email
+expect_audit_record send_email
+finish

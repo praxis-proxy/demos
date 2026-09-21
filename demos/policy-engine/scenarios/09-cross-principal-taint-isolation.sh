@@ -28,16 +28,28 @@ SID_SHARED="shared-$$-${RANDOM}"
 
 step "S1 · Bob → send_email (fresh session, clean body)"
 note "Session: $SID_BASELINE (never touched secret data)"
-note "Expected: 200 OK — baseline, bob can send mail from a clean session"
+note "Baseline: bob can send mail from a clean session"
 SESSION_ID="$SID_BASELINE" call_send_email "$BOB" "$CLIENT"
+expect_status 200
+expect_rpc_ok
 
 step "S2 · Eve → get_compensation (taints EVE's bucket for the shared id)"
 note "Session: $SID_SHARED (bound to eve's subject → H(eve:$SID_SHARED))"
-note "Expected: 200 OK — eve has role.hr; taint(secret, session) fires"
+note "Eve has role.hr; taint(secret, session) fires"
 SESSION_ID="$SID_SHARED" call_get_compensation "$EVE" "$CLIENT" true
+expect_status 200
+expect_rpc_ok
 
 step "S3 · Bob → send_email, SAME session id as eve used, clean body"
 note "Session: $SID_SHARED (bound to bob's subject → H(bob:$SID_SHARED))"
-note "Expected: 200 OK — bob's bucket != eve's, so bob does NOT inherit her taint"
+note "Bob's bucket != eve's, so bob does NOT inherit her taint"
 note "This is the subject-scoping guarantee: taint can't cross principals"
+reset_upstream
 SESSION_ID="$SID_SHARED" call_send_email "$BOB" "$CLIENT"
+expect_status 200
+expect_rpc_ok
+expect_no_violation
+# The negative half of the guarantee: not merely "not denied", but actually
+# delivered. A silent drop here would look identical from the client side.
+expect_upstream_calls 1
+finish
