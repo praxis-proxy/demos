@@ -62,11 +62,29 @@ case "${DEMO_NAME}" in
     grid-glb-demo)           SUBCOMMAND="run-grid-glb-demo" ;;
     grid-llmd-pool-metrics)  SUBCOMMAND="run-grid-llmd-pool-metrics-demo" ;;
     grid-combined-site)      SUBCOMMAND="run-grid-combined-site-demo" ;;
+    grid-distributed-quota)  SUBCOMMAND="run-grid-token-rate-limit-qualification" ;;
     *)
         echo "error: unknown demo '${DEMO_NAME}'" >&2
         exit 1
         ;;
 esac
+
+if [[ "${DEMO_NAME}" == "grid-distributed-quota" ]]; then
+    if [[ "${GRID_XTASK_IMAGE_PULL_POLICY}" != "Never" ]]; then
+        echo "error: grid-distributed-quota requires GRID_XTASK_IMAGE_PULL_POLICY=Never" >&2
+        exit 1
+    fi
+    if [[ " $* " != *" --image-tag "* ]]; then
+        echo "error: grid-distributed-quota requires --image-tag <local-tag>" >&2
+        exit 1
+    fi
+    if [[ ! -f "${GRID_REPO}/xtask/src/env/token_rate_limit_qualification.rs" ]] ||
+       ! grep -q 'three_application_independent_quota_isolation' \
+           "${GRID_REPO}/xtask/src/env/token_rate_limit_qualification.rs"; then
+        echo "error: GRID_REPO lacks the three-application distributed-quota qualification" >&2
+        exit 1
+    fi
+fi
 
 FORGE_CONFIG_NAME="${FORGE_CONFIG_NAME:-forge.yaml}"
 # Must be a bare filename within DEMO_DIR, not a path -- rejects any "/" so a

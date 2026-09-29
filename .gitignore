@@ -29,6 +29,7 @@ target
 # Grid demo artifacts
 .grid-checkout/
 demos/grid-*/.forge/
+demos/grid-*/.forge.*/
 demos/grid-*/.forge.resolved.yaml
 demos/grid-*/.forge.resolved.*.yaml
 demos/grid-*/evidence/
