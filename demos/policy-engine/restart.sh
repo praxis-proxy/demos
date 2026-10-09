@@ -27,7 +27,8 @@
 # auth-channel, or hr-mcp source so those images are rebuilt too.
 #
 # Logs:
-#   ./gateway.log   — gateway stdout/stderr, follow with `tail -F`.
+#   ./gateway.log   — gateway stdout/stderr, follow with `tail -F`. A symlink
+#                     into .gwlog/; see the GATEWAY_LOG note below for why.
 
 set -euo pipefail
 
@@ -37,7 +38,26 @@ cd "$(dirname "$0")"
 # set GATEWAY_CONFIG=praxis-cel.yaml or praxis-opa.yaml for the CEL and
 # OPA/Rego PDP variants.
 GATEWAY_CONFIG="${GATEWAY_CONFIG:-praxis.yaml}"
+# The gateway's config watcher watches the *directory* holding the config, not
+# the config files themselves, and fires on any event in it. On Linux (raw
+# inotify) that means appending to a log file in this directory triggers a
+# reload, which logs, which triggers another — a runaway loop that rebuilds the
+# PolicyEngine ~1x/sec and drops in-memory elicitation state, so scenario 11's
+# CIBA id goes "unknown elicitation id" between polls. macOS/FSEvents coalesces
+# enough to hide it, which is why this only shows up on the remote VM.
+#
+# So the real log lives in a subdirectory and ./gateway.log is a symlink to it:
+# writes land outside the watched directory, while everything that reads
+# ./gateway.log (scenarios/_lib.sh audit assertions, `tail -F`) is unchanged.
 GATEWAY_LOG="gateway.log"
+GATEWAY_LOG_DIR=".gwlog"
+mkdir -p "$GATEWAY_LOG_DIR"
+# Replace a previous run's regular file with the symlink (keep real files out
+# of the watched dir), but leave an already-correct symlink alone.
+if [ ! -L "$GATEWAY_LOG" ]; then
+  rm -f "$GATEWAY_LOG"
+fi
+ln -sfn "$PWD/$GATEWAY_LOG_DIR/$GATEWAY_LOG" "$GATEWAY_LOG"
 KEYCLOAK_HOST="${KEYCLOAK_HOST:-http://localhost:8081}"
 KEYCLOAK_REALM="${KEYCLOAK_REALM:-policy-demo}"
 KEYCLOAK_READY_URL="${KEYCLOAK_HOST}/realms/${KEYCLOAK_REALM}/.well-known/openid-configuration"
