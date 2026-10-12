@@ -13,7 +13,7 @@ services:
     # 26.2+ ships Standard Token Exchange v2 — simpler than v1's
     # fine-grained authz-services permissions. See the README's
     # "Architectural patterns" section for the difference.
-    # Built from ./keycloak/Dockerfile — stock Keycloak 26.2 plus the CIBA
+    # Built from ./keycloak/Dockerfile — stock Keycloak 26.8 plus the CIBA
     # HTTP authentication-channel SPI compiled from keycloak/ciba-spi/.
     build:
       context: ./keycloak
