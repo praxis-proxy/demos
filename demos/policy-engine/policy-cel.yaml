@@ -73,6 +73,43 @@ plugins:
           leeway_seconds: 60
       claim_mapper: standard
 
+  # Workload identity: the calling agent's SPIFFE JWT-SVID, presented on
+  # X-Workload-Token and validated against SPIRE's keys (the spire-oidc
+  # discovery provider on :8443). It fills security.caller_workload, which a
+  # `delegate(..., subject: caller_workload)` step reads.
+  #
+  # Only the get_directory route names it (see routes:), with
+  # replace_inherited, so that route authenticates by the SVID alone. Every
+  # other route is unaffected, which is why it can be on_error: fail. Without
+  # the SPIRE overlay running, the gateway still starts: the initial key fetch
+  # soft-fails and only get_directory is denied (auth.jwks_unavailable).
+  #
+  # SPIRE signs JWT-SVIDs with EC keys (ES256), and the SVID's audience is the
+  # realm issuer, because the SVID is presented to Keycloak as a client
+  # assertion and the SPIFFE client-auth draft requires that audience.
+  - name: jwt-workload
+    capabilities:
+      - perform_http
+    kind: identity/jwt
+    hooks: [identity.resolve]
+    mode: sequential
+    on_error: fail
+    config:
+      role: caller_workload
+      header: X-Workload-Token
+      trusted_issuers:
+        - issuer: "http://spire-oidc:8443"
+          audiences: ["http://localhost:8081/realms/policy-demo"]
+          algorithms: ["ES256"]
+          decoding_key:
+            kind: jwks_url
+            # Reached from the host gateway on the published port
+            # (inside compose it is spire-oidc:8443).
+            url: "http://localhost:8443/keys"
+            insecure_http: true   # localhost dev — never production
+          leeway_seconds: 60
+      claim_mapper: standard
+
   # RFC 8693 token-exchange delegator. Trades the user's hr-copilot
   # token for a workday-api-audience-scoped access token.
   #
@@ -365,4 +402,35 @@ routes:
         - when: "args.amount > 10000"
           do:
             - "require_approval(manager-approver, from: claim.manager, channel: \"ciba\", scope: \"args.amount <= 25000\", purpose: \"Approve a compensation adjustment\", timeout: 24h)"
+        - "run(audit-log)"
+
+  # Workload identity: the agent acts as itself, with no human user involved.
+  # replace_inherited drops the global user and client resolvers, so this
+  # route authenticates by the agent's SPIFFE JWT-SVID alone. The delegate
+  # step runs `subject: caller_workload`, which drives the OAuth delegator's
+  # two legs: leg 1 presents the SVID as an RFC 7523 client assertion
+  # (jwt-spiffe) to authenticate as the agent's Keycloak client, and leg 2
+  # exchanges that token for a workday-api token. The agent holds no standing
+  # workday-api entitlement; the gateway obtains one for the call.
+  # Needs the SPIRE overlay: see "Workload identity" in the README.
+  - tool: get_directory
+    authentication:
+      replace_inherited: true
+      steps:
+        - jwt-workload
+    # The global assertions describe a person (x-auth-user-id from subject.id,
+    # which this route never resolves, with on_missing: deny), so this route
+    # replaces them. Asserting the agent's identity instead is not possible yet:
+    # assertion sources cover subject.*, claim.* and client.*, not
+    # caller_workload.*. replace_inherited also drops the inherited strip list,
+    # so the raw-token strip is restated.
+    assertions:
+      request:
+        replace_inherited: true
+        strip:
+          - x-user-token
+    authorization:
+      pre_invocation:
+        - "delegate(workday-oauth, target: workday-api, audience: workday-api, permissions: [read_compensation], subject: caller_workload)"
+        - "!delegation.granted: deny"
         - "run(audit-log)"

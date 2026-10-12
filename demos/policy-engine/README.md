@@ -244,11 +244,13 @@ rather than one the caller sent.
 | 10 | Bob adjusts compensation by ≤ $10k | Below the threshold: `adjust_compensation` applies immediately, no approval |
 | 11 | Bob adjusts compensation by > $10k | Human-in-the-loop: the gateway suspends with `-32120`, Alice approves out-of-band (CIBA), then it applies |
 | 12 | Bob calls `get_compensation`, then again spoofing an asserted header | `assertions:` renders identity into upstream headers, strips his raw token, and refuses to forward a header he set himself |
+| 13 | The agent calls `get_directory` with only its SPIFFE JWT-SVID | Workload identity: the route authenticates by the SVID alone, and two-leg delegation obtains a `workday-api` token. No person involved. Needs `WITH_SPIRE=1`; skipped otherwise |
 
 Scenarios 10 and 11 exercise the human-in-the-loop flow described in
 [Human-in-the-loop: manager approval](#human-in-the-loop-manager-approval)
 below. Scenario 11 needs the full stack (Keycloak CIBA plus the auth-channel UI);
-`restart.sh` brings it all up.
+`restart.sh` brings it all up. Scenario 13 needs the SPIRE layer described in
+[Workload identity: the agent acts as itself](#workload-identity-the-agent-acts-as-itself).
 
 ## Alternatives: CEL or OPA instead of Cedar
 
@@ -529,6 +531,52 @@ deny / redact paths.
   names the drifted pin; see [Configuring the gateway](#configuring-the-gateway).
   A duplicated crate there means the praxis, praxis-ai and engine pins disagree.
 
+## Workload identity: the agent acts as itself
+
+Scenarios 01 to 12 all involve a person: the caller sends the user's `X-User-Token` and the client's `Authorization`, and identity resolves to someone like Bob. An agent often acts on its own authority instead: a scheduled sync, a background task, a service-to-service call with nobody present. Scenario 13 covers that case. The agent authenticates as a workload, with its SPIFFE JWT-SVID in `X-Workload-Token`, and no person is involved at all.
+
+This needs an optional SPIRE layer, which `restart.sh` adds when asked:
+
+```bash
+WITH_SPIRE=1 ./restart.sh                    # base stack + SPIRE, configured
+./scenarios/13-agent-workload.sh             # 200; the upstream sees a workday-api token
+WITH_SPIRE=1 ./run-scenarios.sh --all-configs
+```
+
+Without `WITH_SPIRE=1` the demo is unchanged, and scenario 13 reports itself skipped.
+
+Two things make the `get_directory` route different from the others.
+
+**It authenticates by the SVID alone.** The route's `authentication:` block sets `replace_inherited: true` with a single `jwt-workload` step, so the global user and client resolvers do not run. No `X-User-Token` and no `Authorization` header are needed; the agent's own identity is the whole story.
+
+**Delegation runs in two legs.** Keycloak accepts a SPIFFE SVID only as an RFC 7523 `client_assertion`, never as a token-exchange `subject_token`. So `delegate(..., subject: caller_workload)` makes two calls:
+
+```text
+leg 1  SVID  --client_assertion (…:jwt-spiffe)-->  Keycloak   base token
+             grant_type=client_credentials                    (azp=hr-copilot-agent)
+leg 2  base  --RFC 8693 token exchange----------->  Keycloak   workday-api token
+             subject_token=<base>, audience=workday-api        (aud=workday-api)
+```
+
+The agent never holds a standing entitlement to `workday-api`; the gateway obtains one, scoped, for the call. The SVID proves who the agent is, and the two legs turn that into a credential the backend accepts.
+
+The SVID is a JWT, but not one Keycloak issued: SPIRE signs it (ES256) and it verifies against SPIRE's keys. That is why it cannot be a `subject_token`, and has to be exchanged for a Keycloak token in leg 1 first.
+
+### What `WITH_SPIRE=1` sets up
+
+- **`docker-compose.spire.yml`** adds `spire-server`, the SVID authority for trust domain `spiffe://policy.demo`, and `spire-oidc`, SPIRE's OIDC discovery provider, which publishes the signing keys at `/keys` (port 8443). It also turns on Keycloak's `spiffe` feature, which is still a preview feature in Keycloak 26.8 because the SPIFFE client authentication specification is still a draft.
+- **`spire/setup-spiffe-idp.sh`** registers SPIRE as a native `spiffe` identity provider in the `policy-demo` realm. The provider type is `spiffe`, not `oidc`: the generic OIDC broker would check tokens through a UserInfo endpoint SPIRE does not serve, while the native provider verifies the SVID's signature against SPIRE's keys.
+- **`spire/configure-federated-client.sh`** creates the `hr-copilot-agent` client, which authenticates with `federated-jwt` bound to the SVID's subject (`spiffe://policy.demo/agent/hr-copilot`). It is separate from `hr-copilot`, the secret-based app client, because a Keycloak client has exactly one way to authenticate. It also adds `praxis-gateway` to the token's audience; without that, leg 2 fails with "Client is not within the token audience".
+
+Both scripts are idempotent and take environment variables to override the realm, trust domain, client and SPIFFE ID; see the top of each script.
+
+> **No attestation in the demo.** SVIDs here are minted directly with `spire-server jwt mint`, skipping the SPIFFE Workload API's node and workload attestation. In production the agent would fetch its SVID from the Workload API and never see the signing key.
+
+### Checking Keycloak without the gateway
+
+- `spire/verify-svid-flow.sh` runs the whole chain in three calls (mint an SVID, use it as a client assertion for the base token, exchange that for a `workday-api` token) and prints the decoded claims at each step. It is the quickest way to confirm the Keycloak setup before running scenario 13.
+- `spire/verify-dual-principal.sh` probes whether Keycloak accepts an agent credential as the RFC 8693 `actor_token` alongside a user's token, the "user, with the agent named as actor" case, and reports which form of actor token works.
+
 ## Notes
 
 **`pii-scan` and `audit-log` are host plugins, not builtins.** The engine bundles
@@ -570,12 +618,14 @@ the padding, so the wire stays correct. This is documented in the filter source.
 | `keycloak/realm-export.json` | Realm with users, clients, STE v2, and CIBA + the channel SPI |
 | `hr-mcp-server/` | Python mock MCP server (Dockerfile and `server.py`), incl. `adjust_compensation` and the `/_requests` recorder the scenarios assert against |
 | `auth-channel/` | CIBA approval UI (`:5001`, "the manager's phone") for Approve / Deny; dev `/pending` + `/approve` API for scripted approval |
-| `scenarios/*.sh` | The twelve scenarios (08/09 session taint, 10/11 manager approval, 12 assertions) and `_lib.sh` helpers plus its `expect_*` assertions |
+| `scenarios/*.sh` | The thirteen scenarios (08/09 session taint, 10/11 manager approval, 12 assertions, 13 workload identity) and `_lib.sh` helpers plus its `expect_*` assertions |
+| `docker-compose.spire.yml` | Optional SPIRE layer for scenario 13: `spire-server`, `spire-oidc` (8443), and Keycloak's `spiffe` feature. Added by `WITH_SPIRE=1` |
+| `spire/` | SPIRE server and discovery-provider config, the Keycloak setup scripts for the SPIFFE identity provider and the agent's federated client, and two checks that exercise Keycloak directly |
 | `run-scenarios.sh` | Run every scenario, optionally across all three PDP configs, and report pass/fail |
 | `mint-token.sh` | Mint a user or client token via Keycloak |
 | `verify-token-exchange.sh` | Check that STE v2 is configured correctly |
 | `walkthrough.sh` | Narrated tour of the core scenarios |
-| `restart.sh` | Tear down, bring up, and smoke-test the demo |
+| `restart.sh` | Tear down, bring up, and smoke-test the demo; `WITH_SPIRE=1` adds the SPIRE layer |
 | `build-gateway.sh` | Build the gateway from `gateway/`, checking the dependency graph first (see "Configuring the gateway") |
 | `gateway/` | Thin binary composing praxis-ai's AI filters + praxis's `policy` filter |
 | `agent/` | Optional Python chat agent for an LLM-driven demo (incl. the manager-approval walkthrough) |

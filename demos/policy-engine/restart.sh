@@ -19,6 +19,7 @@
 # Usage (from this directory):
 #   ./restart.sh
 #   REBUILD_IMAGES=1 ./restart.sh   # force-rebuild container images first
+#   WITH_SPIRE=1 ./restart.sh       # also bring up the SPIRE overlay (scenario 13)
 #
 # `docker compose up -d` builds any *missing* images (Keycloak + the CIBA
 # SPI, auth-channel, hr-mcp) but reuses existing ones. The gateway binary is
@@ -38,6 +39,16 @@ cd "$(dirname "$0")"
 # set GATEWAY_CONFIG=praxis-cel.yaml or praxis-opa.yaml for the CEL and
 # OPA/Rego PDP variants.
 GATEWAY_CONFIG="${GATEWAY_CONFIG:-praxis.yaml}"
+# Optional SPIRE overlay for workload identity (scenario 13). WITH_SPIRE=1 adds
+# docker-compose.spire.yml to every compose call, which also turns on Keycloak's
+# SPIFFE feature, and configures the realm to trust SPIRE once Keycloak is up.
+# Without it the stack is exactly the base demo, and any SPIRE containers left
+# from an earlier run are removed by `down --remove-orphans`.
+WITH_SPIRE="${WITH_SPIRE:-0}"
+COMPOSE=(docker compose)
+if [ "$WITH_SPIRE" = "1" ]; then
+  COMPOSE+=(-f docker-compose.yml -f docker-compose.spire.yml)
+fi
 # The gateway's config watcher watches the *directory* holding the config, not
 # the config files themselves, and fires on any event in it. On Linux (raw
 # inotify) that means appending to a log file in this directory triggers a
@@ -117,17 +128,17 @@ fi
 
 # 2. docker compose down -v.
 step "docker compose down -v (wiping Keycloak + MCP volumes)"
-docker compose down -v
+"${COMPOSE[@]}" down -v --remove-orphans
 ok "containers + volumes removed"
 
 # 3. (optional) rebuild container images, then docker compose up -d.
 if [ "$REBUILD_IMAGES" = "1" ]; then
   step "docker compose build (REBUILD_IMAGES=1 — rebuilding Keycloak+SPI, auth-channel, hr-mcp)"
-  docker compose build
+  "${COMPOSE[@]}" build
   ok "images rebuilt"
 fi
 step "docker compose up -d (fresh start; realm import begins)"
-docker compose up -d
+"${COMPOSE[@]}" up -d
 ok "containers starting"
 
 # 4. Wait for Keycloak's OIDC discovery endpoint.
@@ -166,6 +177,24 @@ if ./verify-token-exchange.sh >/dev/null 2>&1; then
 else
   warn "verify-token-exchange.sh failed — investigate before running scenarios:"
   ./verify-token-exchange.sh || true
+fi
+
+# 5b. (WITH_SPIRE=1) wait for SPIRE's published keys, then register SPIRE as a
+# SPIFFE identity provider and create the agent's federated client.
+if [ "$WITH_SPIRE" = "1" ]; then
+  step "configuring the SPIRE overlay (SPIFFE IdP + federated agent client)"
+  deadline=$(( $(date +%s) + 60 ))
+  while ! curl -fsS http://localhost:8443/keys >/dev/null 2>&1; do
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      die "SPIRE keys not published after 60s — check '${COMPOSE[*]} logs spire-oidc'"
+    fi
+    printf "."
+    sleep 2
+  done
+  printf "\n"
+  ./spire/setup-spiffe-idp.sh >/dev/null
+  ./spire/configure-federated-client.sh >/dev/null
+  ok "SPIFFE IdP and hr-copilot-agent client configured"
 fi
 
 # 6. Start the gateway, tee its output to ./gateway.log, wait for :8090.

@@ -52,7 +52,7 @@ scenarios_to_run() {
 }
 
 run_one_config() {
-  local config="$1" failed=0 passed=0 names=()
+  local config="$1" failed=0 passed=0 skipped=0 names=() rc
   export PDP_DENY_VIOLATION="$(pdp_violation_for "$config")"
 
   printf '\n\033[1;34m══ %s (deny violation: %s) ══\033[0m\n' "$config" "$PDP_DENY_VIOLATION"
@@ -61,9 +61,16 @@ run_one_config() {
   for f in $(scenarios_to_run); do
     name="$(basename "$f" .sh)"
     # 11 blocks on a human click unless told otherwise.
-    if AUTO_APPROVE=1 bash "$f" >"/tmp/scenario-$name.log" 2>&1; then
+    rc=0
+    AUTO_APPROVE=1 bash "$f" >"/tmp/scenario-$name.log" 2>&1 || rc=$?
+    if [ "$rc" -eq 0 ]; then
       printf '  \033[1;32m✓\033[0m %s\n' "$name"
       passed=$((passed + 1))
+    elif [ "$rc" -eq 77 ]; then
+      # A scenario that needs an optional layer (13 needs the SPIRE overlay)
+      # exits 77 when that layer is not running.
+      printf '  \033[1;33m-\033[0m %s (skipped: optional layer not running)\n' "$name"
+      skipped=$((skipped + 1))
     else
       printf '  \033[1;31m✗\033[0m %s\n' "$name"
       # Only the failed expectations, so a failure is readable without
@@ -76,6 +83,7 @@ run_one_config() {
   done
 
   printf '\n  %s passed, %s failed' "$passed" "$failed"
+  [ "$skipped" -ne 0 ] && printf ', %s skipped' "$skipped"
   [ "$failed" -ne 0 ] && printf ' (%s)' "${names[*]}"
   printf '\n'
   return "$failed"
