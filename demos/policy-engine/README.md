@@ -244,7 +244,7 @@ rather than one the caller sent.
 | 10 | Bob adjusts compensation by ≤ $10k | Below the threshold: `adjust_compensation` applies immediately, no approval |
 | 11 | Bob adjusts compensation by > $10k | Human-in-the-loop: the gateway suspends with `-32120`, Alice approves out-of-band (CIBA), then it applies |
 | 12 | Bob calls `get_compensation`, then again spoofing an asserted header | `assertions:` renders identity into upstream headers, strips his raw token, and refuses to forward a header he set himself |
-| 13 | The agent calls `get_directory` with only its SPIFFE JWT-SVID | Workload identity: the route authenticates by the SVID alone, and two-leg delegation obtains a `workday-api` token. No person involved. Needs `WITH_SPIRE=1`; skipped otherwise |
+| 13 | The agent calls `get_headcount` with only its SPIFFE JWT-SVID | Workload identity: the route authenticates by the SVID alone, and two-leg delegation obtains a `workday-api` token. No person involved. Needs `WITH_SPIRE=1`; skipped otherwise |
 
 Scenarios 10 and 11 exercise the human-in-the-loop flow described in
 [Human-in-the-loop: manager approval](#human-in-the-loop-manager-approval)
@@ -545,7 +545,7 @@ WITH_SPIRE=1 ./run-scenarios.sh --all-configs
 
 Without `WITH_SPIRE=1` the demo is unchanged, and scenario 13 reports itself skipped.
 
-Two things make the `get_directory` route different from the others.
+Two things make the `get_headcount` route different from the others.
 
 **It authenticates by the SVID alone.** The route's `authentication:` block sets `replace_inherited: true` with a single `jwt-workload` step, so the global user and client resolvers do not run. No `X-User-Token` and no `Authorization` header are needed; the agent's own identity is the whole story.
 

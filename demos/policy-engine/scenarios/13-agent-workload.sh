@@ -4,7 +4,7 @@
 #
 # Workload identity: the AGENT acts as itself, with no human user involved.
 # The agent presents only its SPIFFE JWT-SVID (X-Workload-Token) to
-# get_directory, a route that authenticates by the SVID alone (route-level
+# get_headcount, a route that authenticates by the SVID alone (route-level
 # `authentication: replace_inherited`). The gateway:
 #
 #   1. resolves caller_workload from the SVID; no X-User-Token or
@@ -36,7 +36,7 @@ if ! curl -sf --max-time 3 -o /dev/null http://localhost:8443/keys; then
   exit 77
 fi
 
-step "Agent (workload) → get_directory with its SPIFFE JWT-SVID (no user token)"
+step "Agent (workload) → get_headcount with its SPIFFE JWT-SVID (no user token)"
 
 SVID=$( (cd "$DEMO_DIR" && docker compose -f docker-compose.yml -f docker-compose.spire.yml \
           exec -T spire-server /opt/spire/bin/spire-server jwt mint \
@@ -50,7 +50,7 @@ reset_upstream
 RAW=$(curl -isS --max-time 20 -X POST "$GATEWAY/mcp" \
   -H "Content-Type: application/json" \
   -H "X-Workload-Token: $SVID" \
-  --data '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_directory","arguments":{}}}')
+  --data '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_headcount","arguments":{}}}')
 _print_response "$RAW"
 
 expect_status 200

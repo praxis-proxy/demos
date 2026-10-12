@@ -72,11 +72,11 @@ plugins:
   # discovery provider on :8443). It fills security.caller_workload, which a
   # `delegate(..., subject: caller_workload)` step reads.
   #
-  # Only the get_directory route names it (see routes:), with
+  # Only the get_headcount route names it (see routes:), with
   # replace_inherited, so that route authenticates by the SVID alone. Every
   # other route is unaffected, which is why it can be on_error: fail. Without
   # the SPIRE overlay running, the gateway still starts: the initial key fetch
-  # soft-fails and only get_directory is denied (auth.jwks_unavailable).
+  # soft-fails and only get_headcount is denied (auth.jwks_unavailable).
   #
   # SPIRE signs JWT-SVIDs with EC keys (ES256), and the SVID's audience is the
   # realm issuer, because the SVID is presented to Keycloak as a client
@@ -412,7 +412,7 @@ routes:
   # exchanges that token for a workday-api token. The agent holds no standing
   # workday-api entitlement; the gateway obtains one for the call.
   # Needs the SPIRE overlay: see "Workload identity" in the README.
-  - tool: get_directory
+  - tool: get_headcount
     authentication:
       replace_inherited: true
       steps:

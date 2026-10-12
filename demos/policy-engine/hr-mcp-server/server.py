@@ -23,7 +23,8 @@ Endpoints:
 than printing a claim next to a log line and trusting a human to read it.
 
 Tools:
-    get_compensation, send_email, display_compensation, get_directory
+    get_compensation, send_email, display_compensation, get_directory,
+    search_repos, adjust_compensation, get_headcount
 """
 
 import base64
@@ -255,6 +256,15 @@ def tool_get_directory(args: dict[str, Any]) -> list[dict[str, Any]]:
     return entries
 
 
+def tool_get_headcount(args: dict[str, Any]) -> dict[str, Any]:
+    # Aggregate only, no names: the kind of report an agent produces on its
+    # own, with no user behind the call. The workload scenarios use it.
+    counts: dict[str, int] = {}
+    for emp in EMPLOYEES.values():
+        counts[emp["department"]] = counts.get(emp["department"], 0) + 1
+    return {"headcount": counts, "total": sum(counts.values())}
+
+
 def tool_search_repos(args: dict[str, Any]) -> dict[str, Any]:
     # Simulated GitHub Enterprise search. The interesting demo
     # property: this returns the repo IF the gateway allowed the
@@ -298,6 +308,7 @@ TOOLS = {
     "send_email": tool_send_email,
     "display_compensation": tool_display_compensation,
     "get_directory": tool_get_directory,
+    "get_headcount": tool_get_headcount,
     "search_repos": tool_search_repos,
     "adjust_compensation": tool_adjust_compensation,
 }
