@@ -36,4 +36,4 @@ filter_chains:
         clusters:
           - name: vllm
             endpoints:
-              - "10.0.0.99:8000"
+              - "${VLLM_ENDPOINT}"
