@@ -3,8 +3,9 @@
 # Copyright (c) 2026 Praxis Contributors
 #
 # Register SPIRE as a native SPIFFE identity provider ("spiffe") in the
-# policy-demo realm, so Keycloak can validate JWT-SVIDs and later exchange them
-# for scoped downstream tokens (external->internal, legacy token exchange).
+# policy-demo realm, so Keycloak can validate JWT-SVIDs presented as client
+# assertions (federated-jwt client authentication). The SVID is never a token
+# exchange subject_token here, and legacy token exchange is not enabled.
 #
 # providerId is "spiffe", NOT "oidc": the generic OIDC broker validates an
 # exchanged subject token via the IdP's UserInfo endpoint, which SPIRE does not

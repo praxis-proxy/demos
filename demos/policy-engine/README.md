@@ -218,7 +218,7 @@ heals that one itself by regenerating.
 
 ## Scenarios
 
-Twelve scenarios cover every feature in the filter. Run any one directly, for
+Thirteen scenarios cover every feature in the filter. Run any one directly, for
 example `./scenarios/01-bob-allow.sh`, or all of them with `./run-scenarios.sh`.
 
 Each scenario checks its own expectations and exits non-zero when one is not
@@ -538,7 +538,7 @@ Scenarios 01 to 12 all involve a person: the caller sends the user's `X-User-Tok
 This needs an optional SPIRE layer, which `restart.sh` adds when asked:
 
 ```bash
-WITH_SPIRE=1 ./restart.sh                    # base stack + SPIRE, configured
+REBUILD_IMAGES=1 WITH_SPIRE=1 ./restart.sh   # base stack + SPIRE, rebuilt and configured
 ./scenarios/13-agent-workload.sh             # 200; the upstream sees a workday-api token
 WITH_SPIRE=1 ./run-scenarios.sh --all-configs
 ```

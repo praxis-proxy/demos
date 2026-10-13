@@ -13,9 +13,9 @@
 # node/workload attestation) — a genuine SPIRE-signed SVID against
 # SPIRE's real JWKS, with a two-service footprint.
 #
-#   # Bring up just the SPIRE layer:
-#   docker compose -f docker-compose.yml -f docker-compose.spire.yml \
-#     up -d spire-server spire-oidc
+#   # Bring up the demo with SPIRE. This recreates Keycloak with the spiffe
+#   # feature below and registers SPIRE in the realm:
+#   WITH_SPIRE=1 ./restart.sh
 #
 #   # Mint the agent's JWT-SVID (audience = the demo realm's issuer):
 #   docker compose -f docker-compose.yml -f docker-compose.spire.yml \

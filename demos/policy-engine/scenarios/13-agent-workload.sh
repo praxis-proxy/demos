@@ -7,13 +7,14 @@
 # get_headcount, a route that authenticates by the SVID alone (route-level
 # `authentication: replace_inherited`). The gateway:
 #
-#   1. resolves caller_workload from the SVID; no X-User-Token or
-#      Authorization header is sent,
+#   1. resolves caller_workload from the SVID alone; no user or client token
+#      is needed,
 #   2. runs `delegate(..., subject: caller_workload)`: leg 1 presents the SVID
 #      as an RFC 7523 client assertion (type ...:jwt-spiffe) to authenticate as
 #      the hr-copilot-agent client, and leg 2 exchanges that token for a
 #      workday-api-scoped credential,
-#   3. attaches the minted workday-api token to the upstream call.
+#   3. attaches the minted workday-api token to the upstream call, and strips
+#      a stray X-User-Token and a spoofed X-Auth-User-Id the call also carries.
 #
 # Scenarios 01-12 carry a person's X-User-Token and the client's Authorization;
 # this one carries neither. The agent's own workload identity is the whole story.
@@ -50,6 +51,8 @@ reset_upstream
 RAW=$(curl -isS --max-time 20 -X POST "$GATEWAY/mcp" \
   -H "Content-Type: application/json" \
   -H "X-Workload-Token: $SVID" \
+  -H "X-User-Token: stray" \
+  -H "X-Auth-User-Id: bob" \
   --data '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_headcount","arguments":{}}}')
 _print_response "$RAW"
 
@@ -60,5 +63,8 @@ expect_upstream_calls 1
 # The tool is handed a token Keycloak minted for its own audience, obtained
 # from the agent's SVID; the agent never held one.
 expect_upstream_audience workday-api
+# A stray user token and a spoofed asserted header ride along on the request;
+# the route's strip list must remove both before hr-mcp sees them.
 expect_upstream_no_header x-user-token
+expect_upstream_no_header x-auth-user-id
 finish

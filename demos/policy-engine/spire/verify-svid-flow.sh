@@ -10,16 +10,16 @@
 #      draft-ietf-oauth-spiffe-client-auth).
 #   2. The SVID is presented as an RFC 7523 client_assertion
 #      (type ...:jwt-spiffe) — Keycloak validates it against the SPIFFE
-#      trust bundle and issues hr-copilot's token. No client secret.
+#      trust bundle and issues hr-copilot-agent's token. No client secret.
 #   3. A standard (v2) token exchange scopes that token down to the
 #      workday-api audience with read_compensation. Both tokens are
 #      Keycloak-issued (internal->internal), so this is ordinary v2 exchange.
 #
-# The minted workday-api token keeps sub=service-account-hr-copilot, so the
+# The minted workday-api token keeps sub=service-account-hr-copilot-agent, so the
 # workload identity flows through to the downstream call.
 #
 # Prereq: stack up + IdP/client configured:
-#   docker compose -f docker-compose.yml -f docker-compose.spire.yml up -d
+#   WITH_SPIRE=1 ./restart.sh
 #   ./spire/setup-spiffe-idp.sh && ./spire/configure-federated-client.sh
 set -euo pipefail
 
@@ -48,6 +48,10 @@ print("   " + " | ".join(f"{k}={c.get(k)}" for k in sys.argv[1:] if k in c))' "$
 echo "1. SPIRE mints the agent SVID (aud=$ISSUER)"
 SVID=$("${COMPOSE[@]}" exec -T spire-server /opt/spire/bin/spire-server jwt mint \
   -spiffeID "$SPIFFE_ID" -audience "$ISSUER" 2>/dev/null | tr -d '[:space:]')
+if [ -z "$SVID" ]; then
+  echo "   FAIL: spire-server minted no SVID (is the SPIRE overlay up?)" >&2
+  exit 1
+fi
 printf '%s' "$SVID" | claims sub aud iss
 
 echo "2. SVID as client_assertion -> Keycloak issues the workload's token"

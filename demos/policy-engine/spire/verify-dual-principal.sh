@@ -12,12 +12,12 @@
 # accepts:
 #   A. actor_token = the RAW SVID          <- exactly what the PPE delegator sends today
 #   B. actor_token = a base token minted    <- fallback: SVID->client_assertion->token,
-#      from the SVID first (scenario-12 leg 1)   then that Keycloak token as the actor
+#      from the SVID first (scenario-13 leg 1)   then that Keycloak token as the actor
 #
 # The subject is always the user's token (bob), as in Recipe 1/6.
 #
 # Prereq: full stack + SPIRE + SPIFFE IdP/client configured:
-#   docker compose -f docker-compose.yml -f docker-compose.spire.yml up -d
+#   WITH_SPIRE=1 ./restart.sh
 #   ./spire/setup-spiffe-idp.sh && ./spire/configure-federated-client.sh
 set -euo pipefail
 
@@ -116,10 +116,10 @@ if [ "${rc_a:-1}" -eq 0 ]; then
   echo "-> add the demo scenario with delegate(subject: user, actor: caller_workload) as-is."
 elif [ "${rc_b:-1}" -eq 0 ]; then
   echo "Raw SVID is NOT accepted as actor_token, but a base token minted from it IS."
-  echo "-> the actor path needs the same client_assertion leg as scenario 12 before the"
+  echo "-> the actor path needs the same client_assertion leg as scenario 13 before the"
   echo "   exchange (delegator work), not just YAML. Recipe 6's note stands: verify per IdP."
 else
   echo "Neither variant produced an act claim on this Keycloak."
-  echo "-> Keycloak STE may not surface actor_token as an act claim here; investigate KC"
-  echo "   token-exchange actor support / mappers before wiring a scenario."
+  echo "-> expected here: Keycloak 26.8 reads actor_token only with the preview"
+  echo "   token-exchange-delegation feature, and then needs may_act in the subject token."
 fi

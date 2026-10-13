@@ -422,12 +422,15 @@ routes:
     # replaces them. Asserting the agent's identity instead is not possible yet:
     # assertion sources cover subject.*, claim.* and client.*, not
     # caller_workload.*. replace_inherited also drops the inherited strip list,
-    # so the raw-token strip is restated.
+    # so the raw-token strip is restated, and x-auth-* is stripped: without the
+    # global entries nothing else removes a caller's own x-auth-user-id before
+    # it reaches hr-mcp, which is the spoof scenario 12 refuses.
     assertions:
       request:
         replace_inherited: true
         strip:
           - x-user-token
+          - x-auth-*
     authorization:
       pre_invocation:
         - "delegate(workday-oauth, target: workday-api, audience: workday-api, permissions: [read_compensation], subject: caller_workload)"
