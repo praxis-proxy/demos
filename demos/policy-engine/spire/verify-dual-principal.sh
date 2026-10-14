@@ -23,7 +23,8 @@ set -euo pipefail
 
 KC="${KC:-http://localhost:8081}"
 REALM="${REALM:-policy-demo}"
-SPIFFE_ID="${SPIFFE_ID:-spiffe://policy.demo/agent/hr-copilot}"
+# The agent runs as this uid in the `workloads` container; SPIRE attests it.
+WORKLOAD_UID="${WORKLOAD_UID:-1001}"
 AUDIENCE="${AUDIENCE:-workday-api}"
 SCOPE="${SCOPE:-read_compensation}"
 # The user whose authority the minted token speaks for (the subject).
@@ -37,8 +38,6 @@ TOKEN_URL="$KC/realms/$REALM/protocol/openid-connect/token"
 ISSUER="$KC/realms/$REALM"
 JWT_TT="urn:ietf:params:oauth:token-type:jwt"
 ACCESS_TT="urn:ietf:params:oauth:token-type:access_token"
-
-COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.spire.yml)
 
 claims() { # decode a JWT payload and print selected claims (incl. nested act.sub)
   python3 -c '
@@ -89,8 +88,7 @@ USER_TOK=$(curl -sf -X POST "$TOKEN_URL" \
 printf '%s' "$USER_TOK" | claims preferred_username aud
 
 echo "2. agent SVID (the actor), aud=$ISSUER"
-SVID=$("${COMPOSE[@]}" exec -T spire-server /opt/spire/bin/spire-server jwt mint \
-  -spiffeID "$SPIFFE_ID" -audience "$ISSUER" 2>/dev/null | tr -d '[:space:]')
+SVID=$("$(dirname "$0")/fetch-svid.sh" "$WORKLOAD_UID" "$ISSUER")
 printf '%s' "$SVID" | claims sub aud
 
 echo "3. Variant A — actor_token = RAW SVID (what the PPE delegator sends today)"

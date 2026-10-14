@@ -10,3 +10,6 @@ agent/.venv/
 __pycache__/
 *.pyc
 .env
+
+# SPIRE server bundle exported by restart.sh for the agent to bootstrap from
+spire/agent/bootstrap.crt

@@ -49,6 +49,13 @@ COMPOSE=(docker compose)
 if [ "$WITH_SPIRE" = "1" ]; then
   COMPOSE+=(-f docker-compose.yml -f docker-compose.spire.yml)
 fi
+# The SPIRE agent and the workloads container sit under the `attestation`
+# profile, because the agent needs a join token that only exists once the
+# server is up (step 5b). Teardown names the profile so they go too.
+DOWN=("${COMPOSE[@]}")
+if [ "$WITH_SPIRE" = "1" ]; then
+  DOWN+=(--profile attestation)
+fi
 # The gateway's config watcher watches the *directory* holding the config, not
 # the config files themselves, and fires on any event in it. On Linux (raw
 # inotify) that means appending to a log file in this directory triggers a
@@ -128,13 +135,13 @@ fi
 
 # 2. docker compose down -v.
 step "docker compose down -v (wiping Keycloak + MCP volumes)"
-"${COMPOSE[@]}" down -v --remove-orphans
+"${DOWN[@]}" down -v --remove-orphans
 ok "containers + volumes removed"
 
 # 3. (optional) rebuild container images, then docker compose up -d.
 if [ "$REBUILD_IMAGES" = "1" ]; then
   step "docker compose build (REBUILD_IMAGES=1 — rebuilding Keycloak+SPI, auth-channel, hr-mcp)"
-  "${COMPOSE[@]}" build
+  "${DOWN[@]}" build
   ok "images rebuilt"
 fi
 step "docker compose up -d (fresh start; realm import begins)"
@@ -179,10 +186,11 @@ else
   ./verify-token-exchange.sh || true
 fi
 
-# 5b. (WITH_SPIRE=1) wait for SPIRE's published keys, then register SPIRE as a
-# SPIFFE identity provider and create the agent's federated client.
+# 5b. (WITH_SPIRE=1) wait for SPIRE's published keys, join the SPIRE agent to
+# the server, register the workloads, then register SPIRE as a SPIFFE identity
+# provider and create the agent's federated client.
 if [ "$WITH_SPIRE" = "1" ]; then
-  step "configuring the SPIRE overlay (SPIFFE IdP + federated agent client)"
+  step "configuring the SPIRE overlay (agent, workloads, SPIFFE IdP, federated client)"
   deadline=$(( $(date +%s) + 60 ))
   while ! curl -fsS http://localhost:8443/keys >/dev/null 2>&1; do
     if [ "$(date +%s)" -ge "$deadline" ]; then
@@ -192,9 +200,21 @@ if [ "$WITH_SPIRE" = "1" ]; then
     sleep 2
   done
   printf "\n"
+  # Node attestation: the agent trusts only the bundle exported here, and
+  # proves itself to the server with a one-time join token. The token's
+  # -spiffeID gives the node a stable ID for registration entries to name.
+  SPIRE_SERVER=("${COMPOSE[@]}" exec -T spire-server /opt/spire/bin/spire-server)
+  "${SPIRE_SERVER[@]}" bundle show > spire/agent/bootstrap.crt
+  SPIRE_JOIN_TOKEN=$("${SPIRE_SERVER[@]}" token generate \
+    -spiffeID spiffe://policy.demo/node/demo-host | awk '{print $2}')
+  [ -n "$SPIRE_JOIN_TOKEN" ] || die "spire-server generated no join token"
+  SPIRE_JOIN_TOKEN="$SPIRE_JOIN_TOKEN" "${COMPOSE[@]}" --profile attestation \
+    up -d spire-agent workloads >/dev/null 2>&1 \
+    || die "SPIRE agent did not start — check '${COMPOSE[*]} --profile attestation logs spire-agent'"
+  ./spire/register-workloads.sh >/dev/null
   ./spire/setup-spiffe-idp.sh >/dev/null
   ./spire/configure-federated-client.sh >/dev/null
-  ok "SPIFFE IdP and hr-copilot-agent client configured"
+  ok "SPIRE agent joined, workloads registered, SPIFFE IdP and hr-copilot-agent client configured"
 fi
 
 # 6. Start the gateway, tee its output to ./gateway.log, wait for :8090.

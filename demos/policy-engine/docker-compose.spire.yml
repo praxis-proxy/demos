@@ -3,25 +3,27 @@
 #
 # Additive SPIRE layer for the Praxis Policy Engine HR demo.
 #
-# Brings up the SPIFFE workload-identity authority (spire-server) and its
-# OIDC discovery provider (spire-oidc) so Keycloak can validate JWT-SVIDs.
+# Brings up the SPIFFE workload-identity authority (spire-server), its OIDC
+# discovery provider (spire-oidc) so Keycloak can validate JWT-SVIDs, and a
+# SPIRE agent (spire-agent) that issues SVIDs to the processes in the
+# `workloads` container after attesting them.
 # This file is ADDITIVE: it adds services on the demo's existing compose
 # network and changes nothing in docker-compose.yml, so the running HR
 # demo is unaffected until Keycloak is wired to trust SPIRE.
 #
-# For the demo we mint SVIDs directly off the server (no agent, no
-# node/workload attestation) — a genuine SPIRE-signed SVID against
-# SPIRE's real JWKS, with a two-service footprint.
+# Attestation happens twice. The agent proves itself to the server with a
+# one-time join token (node attestation), and when a process asks for an SVID
+# the agent identifies it by its uid, read from the kernel (workload
+# attestation with the `unix` attestor). Registration entries map uids to
+# SPIFFE IDs (spire/register-workloads.sh).
 #
 #   # Bring up the demo with SPIRE. This recreates Keycloak with the spiffe
 #   # feature below and registers SPIRE in the realm:
 #   WITH_SPIRE=1 ./restart.sh
 #
-#   # Mint the agent's JWT-SVID (audience = the demo realm's issuer):
-#   docker compose -f docker-compose.yml -f docker-compose.spire.yml \
-#     exec spire-server /opt/spire/bin/spire-server jwt mint \
-#       -spiffeID spiffe://policy.demo/agent/hr-copilot \
-#       -audience http://localhost:8081/realms/policy-demo
+#   # Fetch the agent's JWT-SVID as the agent does, from the Workload API as
+#   # uid 1001 (audience = the demo realm's issuer):
+#   ./spire/fetch-svid.sh 1001 http://localhost:8081/realms/policy-demo
 #
 #   # Inspect the JWKS Keycloak will trust — MUST show "use":"sig":
 #   curl -s http://localhost:8443/keys | jq
@@ -82,6 +84,45 @@ services:
     ports:
       - "8443:8443"
 
+  # The SPIRE agent: joins the server with a one-time join token, then serves
+  # the Workload API to the `workloads` container. Under the `attestation`
+  # profile because it can only start once restart.sh has generated the token
+  # and exported the server's bundle; restart.sh starts it.
+  spire-agent:
+    image: ghcr.io/spiffe/spire-agent:1.9.6   # match server tag
+    container_name: policy-demo-spire-agent
+    profiles: ["attestation"]
+    command: ["-config", "/opt/spire/conf/agent/agent.conf", "-joinToken", "${SPIRE_JOIN_TOKEN:-}"]
+    depends_on:
+      spire-server:
+        condition: service_healthy
+    volumes:
+      - ./spire/agent/agent.conf:/opt/spire/conf/agent/agent.conf:ro
+      - ./spire/agent/bootstrap.crt:/opt/spire/conf/agent/bootstrap.crt:ro
+      - spire-agent-socket:/opt/spire/sockets
+    healthcheck:
+      test: ["CMD", "/opt/spire/bin/spire-agent", "healthcheck", "-socketPath", "/opt/spire/sockets/agent.sock"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
+  # Where the agent processes run, one user per agent. It shares the SPIRE
+  # agent's PID namespace, so the agent can look up a caller's uid from the
+  # kernel when it attests it, and its Workload API socket.
+  workloads:
+    build: ./spire/workloads
+    image: policy-demo-workloads
+    container_name: policy-demo-workloads
+    profiles: ["attestation"]
+    pid: "service:spire-agent"
+    depends_on:
+      spire-agent:
+        condition: service_healthy
+    volumes:
+      - spire-agent-socket:/opt/spire/sockets:ro
+
 volumes:
   spire-server-data:
   spire-server-socket:
+  spire-agent-socket:

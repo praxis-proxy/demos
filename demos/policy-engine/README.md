@@ -244,7 +244,7 @@ rather than one the caller sent.
 | 10 | Bob adjusts compensation by ≤ $10k | Below the threshold: `adjust_compensation` applies immediately, no approval |
 | 11 | Bob adjusts compensation by > $10k | Human-in-the-loop: the gateway suspends with `-32120`, Alice approves out-of-band (CIBA), then it applies |
 | 12 | Bob calls `get_compensation`, then again spoofing an asserted header | `assertions:` renders identity into upstream headers, strips his raw token, and refuses to forward a header he set himself |
-| 13 | The agent calls `get_headcount` with only its SPIFFE JWT-SVID | Workload identity: the route authenticates by the SVID alone, and two-leg delegation obtains a `workday-api` token. No person involved. Needs `WITH_SPIRE=1`; skipped otherwise |
+| 13 | The agent calls `get_headcount` with only its SPIFFE JWT-SVID | Workload identity: the agent gets its SVID by attestation, the route authenticates by the SVID alone, and two-leg delegation obtains a `workday-api` token. No person involved. An unregistered process gets no SVID. Needs `WITH_SPIRE=1`; skipped otherwise |
 
 Scenarios 10 and 11 exercise the human-in-the-loop flow described in
 [Human-in-the-loop: manager approval](#human-in-the-loop-manager-approval)
@@ -565,16 +565,24 @@ The SVID is a JWT, but not one Keycloak issued: SPIRE signs it (ES256) and it ve
 ### What `WITH_SPIRE=1` sets up
 
 - **`docker-compose.spire.yml`** adds `spire-server`, the SVID authority for trust domain `spiffe://policy.demo`, and `spire-oidc`, SPIRE's OIDC discovery provider, which publishes the signing keys at `/keys` (port 8443). It also turns on Keycloak's `spiffe` feature, which is still a preview feature in Keycloak 26.8 because the SPIFFE client authentication specification is still a draft.
+- **`spire-agent` and `workloads`** are where SVIDs come from. `restart.sh` exports the server's CA bundle and generates a one-time join token, and the agent uses them to join the server (node attestation). The `workloads` container is where the agent processes run, one user per agent. It shares the SPIRE agent's process namespace and Workload API socket, so when a process asks for an SVID, the agent reads its uid from the kernel and issues the SVID registered for that uid (workload attestation, with SPIRE's `unix` attestor). A process the registry does not name gets nothing.
+- **`spire/register-workloads.sh`** creates the registration entry: a process running as uid 1001 in `workloads` is `spiffe://policy.demo/ns/hr/sa/copilot`. The ID follows the usual namespace and service account shape, naming where the agent runs.
 - **`spire/setup-spiffe-idp.sh`** registers SPIRE as a native `spiffe` identity provider in the `policy-demo` realm. The provider type is `spiffe`, not `oidc`: the generic OIDC broker would check tokens through a UserInfo endpoint SPIRE does not serve, while the native provider verifies the SVID's signature against SPIRE's keys.
-- **`spire/configure-federated-client.sh`** creates the `hr-copilot-agent` client, which authenticates with `federated-jwt` bound to the SVID's subject (`spiffe://policy.demo/agent/hr-copilot`). It is separate from `hr-copilot`, the secret-based app client, because a Keycloak client has exactly one way to authenticate. It also adds `praxis-gateway` to the token's audience; without that, leg 2 fails with "Client is not within the token audience".
+- **`spire/configure-federated-client.sh`** creates the `hr-copilot-agent` client, which authenticates with `federated-jwt` bound to the SVID's subject (`spiffe://policy.demo/ns/hr/sa/copilot`). It is separate from `hr-copilot`, the secret-based app client, because a Keycloak client has exactly one way to authenticate. It also adds `praxis-gateway` to the token's audience; without that, leg 2 fails with "Client is not within the token audience".
 
-Both scripts are idempotent and take environment variables to override the realm, trust domain, client and SPIFFE ID; see the top of each script.
+The scripts are idempotent and take environment variables to override the realm, trust domain, client, SPIFFE ID and selector; see the top of each script.
 
-> **No attestation in the demo.** SVIDs here are minted directly with `spire-server jwt mint`, skipping the SPIFFE Workload API's node and workload attestation. In production the agent would fetch its SVID from the Workload API and never see the signing key.
+To fetch an SVID the way the agent does, from the Workload API as uid 1001:
+
+```bash
+./spire/fetch-svid.sh 1001 http://localhost:8081/realms/policy-demo
+```
+
+What this attests is narrow: the process runs as uid 1001, on a node that joined with the one-time token. It does not check what code the process runs, so any process with that uid in `workloads` would get the SVID, and the join token proves only that the agent was handed it. Real deployments attest nodes with something the platform vouches for (a cloud instance identity document, a Kubernetes service account token, a TPM) and select workloads on more than a uid: in Kubernetes the `k8s` attestor selects on namespace, service account and image, which is where the ID's shape comes from. The demo shows the issuance path, not an approved-software check.
 
 ### Checking Keycloak without the gateway
 
-- `spire/verify-svid-flow.sh` runs the whole chain in three calls (mint an SVID, use it as a client assertion for the base token, exchange that for a `workday-api` token) and prints the decoded claims at each step. It is the quickest way to confirm the Keycloak setup before running scenario 13.
+- `spire/verify-svid-flow.sh` runs the whole chain in three calls (fetch the agent's SVID, use it as a client assertion for the base token, exchange that for a `workday-api` token) and prints the decoded claims at each step. It is the quickest way to confirm the Keycloak setup before running scenario 13.
 - `spire/verify-dual-principal.sh` probes whether Keycloak accepts an agent credential as the RFC 8693 `actor_token` alongside a user's token, the "user, with the agent named as actor" case, and reports which form of actor token works.
 
 ## Notes
@@ -620,7 +628,7 @@ the padding, so the wire stays correct. This is documented in the filter source.
 | `auth-channel/` | CIBA approval UI (`:5001`, "the manager's phone") for Approve / Deny; dev `/pending` + `/approve` API for scripted approval |
 | `scenarios/*.sh` | The thirteen scenarios (08/09 session taint, 10/11 manager approval, 12 assertions, 13 workload identity) and `_lib.sh` helpers plus its `expect_*` assertions |
 | `docker-compose.spire.yml` | Optional SPIRE layer for scenario 13: `spire-server`, `spire-oidc` (8443), and Keycloak's `spiffe` feature. Added by `WITH_SPIRE=1` |
-| `spire/` | SPIRE server and discovery-provider config, the Keycloak setup scripts for the SPIFFE identity provider and the agent's federated client, and two checks that exercise Keycloak directly |
+| `spire/` | SPIRE server, agent and discovery-provider config, the `workloads` image, the workload registration and SVID fetch scripts, the Keycloak setup scripts for the SPIFFE identity provider and the agent's federated client, and two checks that exercise Keycloak directly |
 | `run-scenarios.sh` | Run every scenario, optionally across all three PDP configs, and report pass/fail |
 | `mint-token.sh` | Mint a user or client token via Keycloak |
 | `verify-token-exchange.sh` | Check that STE v2 is configured correctly |

@@ -3,7 +3,10 @@
 # Copyright (c) 2026 Praxis Contributors
 #
 # Workload identity: the AGENT acts as itself, with no human user involved.
-# The agent presents only its SPIFFE JWT-SVID (X-Workload-Token) to
+# The agent runs as uid 1001 in the `workloads` container and fetches its
+# SPIFFE JWT-SVID from the Workload API; SPIRE attests the process and issues
+# the SVID registered for it. The agent presents only that SVID
+# (X-Workload-Token) to
 # get_headcount, a route that authenticates by the SVID alone (route-level
 # `authentication: replace_inherited`). The gateway:
 #
@@ -25,7 +28,7 @@
 set -euo pipefail
 source "$(dirname "$0")/_lib.sh"
 
-SPIFFE_ID="${SPIFFE_ID:-spiffe://policy.demo/agent/hr-copilot}"
+WORKLOAD_UID="${WORKLOAD_UID:-1001}"
 # The SVID's audience must be the realm issuer: Keycloak's SPIFFE client
 # authentication rejects an SVID whose sole audience is not the authorization
 # server it is presented to.
@@ -39,11 +42,9 @@ fi
 
 step "Agent (workload) → get_headcount with its SPIFFE JWT-SVID (no user token)"
 
-SVID=$( (cd "$DEMO_DIR" && docker compose -f docker-compose.yml -f docker-compose.spire.yml \
-          exec -T spire-server /opt/spire/bin/spire-server jwt mint \
-          -spiffeID "$SPIFFE_ID" -audience "$REALM_ISSUER") 2>/dev/null | tr -d '[:space:]')
+SVID=$("$DEMO_DIR/spire/fetch-svid.sh" "$WORKLOAD_UID" "$REALM_ISSUER" 2>/dev/null) || true
 if [ -z "$SVID" ]; then
-  fail_ "could not mint an SVID from spire-server"
+  fail_ "SPIRE issued no SVID to uid $WORKLOAD_UID"
   finish
 fi
 
@@ -67,4 +68,13 @@ expect_upstream_audience workday-api
 # the route's strip list must remove both before hr-mcp sees them.
 expect_upstream_no_header x-user-token
 expect_upstream_no_header x-auth-user-id
+
+step "An unregistered process in the same container gets no SVID"
+# uid 1004 has no registration entry, so the agent attests it and refuses.
+# Nothing it could present exists to be stolen or replayed.
+if SVID_WAIT=0 "$DEMO_DIR/spire/fetch-svid.sh" 1004 "$REALM_ISSUER" >/dev/null 2>&1; then
+  fail_ "SPIRE issued an SVID to unregistered uid 1004"
+else
+  pass_ "SPIRE refused uid 1004 (no identity issued)"
+fi
 finish

@@ -25,7 +25,8 @@ set -euo pipefail
 
 KC="${KC:-http://localhost:8081}"
 REALM="${REALM:-policy-demo}"
-SPIFFE_ID="${SPIFFE_ID:-spiffe://policy.demo/agent/hr-copilot}"
+# The workload runs as this uid in the `workloads` container; SPIRE attests it.
+WORKLOAD_UID="${WORKLOAD_UID:-1001}"
 AUDIENCE="${AUDIENCE:-workday-api}"
 SCOPE="${SCOPE:-read_compensation}"
 # The gateway client that performs the downstream exchange (STE-enabled).
@@ -33,8 +34,6 @@ EXCHANGE_CLIENT="${EXCHANGE_CLIENT:-praxis-gateway}"
 EXCHANGE_SECRET="${EXCHANGE_SECRET:-praxis-gateway-secret}"
 TOKEN_URL="$KC/realms/$REALM/protocol/openid-connect/token"
 ISSUER="$KC/realms/$REALM"
-
-COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.spire.yml)
 
 claims() { # decode a JWT payload and print selected claims
   python3 -c '
@@ -45,13 +44,11 @@ c=json.loads(base64.urlsafe_b64decode(p))
 print("   " + " | ".join(f"{k}={c.get(k)}" for k in sys.argv[1:] if k in c))' "$@"
 }
 
-echo "1. SPIRE mints the agent SVID (aud=$ISSUER)"
-SVID=$("${COMPOSE[@]}" exec -T spire-server /opt/spire/bin/spire-server jwt mint \
-  -spiffeID "$SPIFFE_ID" -audience "$ISSUER" 2>/dev/null | tr -d '[:space:]')
-if [ -z "$SVID" ]; then
-  echo "   FAIL: spire-server minted no SVID (is the SPIRE overlay up?)" >&2
+echo "1. The agent fetches its SVID from the Workload API as uid $WORKLOAD_UID (aud=$ISSUER)"
+SVID=$("$(dirname "$0")/fetch-svid.sh" "$WORKLOAD_UID" "$ISSUER") || {
+  echo "   FAIL: SPIRE issued no SVID (is the SPIRE overlay up?)" >&2
   exit 1
-fi
+}
 printf '%s' "$SVID" | claims sub aud iss
 
 echo "2. SVID as client_assertion -> Keycloak issues the workload's token"

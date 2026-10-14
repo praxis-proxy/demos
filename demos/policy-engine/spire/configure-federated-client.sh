@@ -30,7 +30,7 @@ ADMIN="${ADMIN:-admin}"
 ADMIN_PW="${ADMIN_PW:-admin}"
 IDP_ALIAS="${IDP_ALIAS:-spiffe}"
 CLIENT_ID="${CLIENT_ID:-hr-copilot-agent}"
-EXPECTED_SUB="${EXPECTED_SUB:-spiffe://policy.demo/agent/hr-copilot}"
+EXPECTED_SUB="${EXPECTED_SUB:-spiffe://policy.demo/ns/hr/sa/copilot}"
 # The gateway client that performs the downstream (leg 2) exchange must be
 # within this client's token audience, or the exchange fails with
 # "Client is not within the token audience". An audience mapper adds it.
