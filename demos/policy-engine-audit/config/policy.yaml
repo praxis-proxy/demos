@@ -1,0 +1,183 @@
+# Policy document for the praxis-audit demo (PPE APL).
+#
+# Adapted from the HR demo policy in praxis-demos (`demos/cpex/policy-cel.yaml`,
+# corpus copy at praxis-proxy/praxis crates/filter/tests/corpus/demo-cel.yaml).
+# Same realm, users and routes. Two changes:
+#
+#   - the `audit/logger` step is replaced by the `ocsf-audit` sink. With no
+#     `hooks:` it attaches as an audit sink and records EVERY verdict (allow,
+#     allow-after-modify, deny) as a chained, DSSE-signed OCSF API Activity
+#     event, with no `run(...)` step needed on any route;
+#   - `fetch_doc` is routed, and `send_email` gains a CEL check on the
+#     recipient domain, so the injection beat has two independent layers.
+#
+# Hot path for one tools/call:
+#   1. jwt-user / jwt-client validate the user and agent tokens (Keycloak).
+#   2. The route's pre_invocation steps run in order; the first deny wins.
+#   3. Whatever the verdict, the executor hands the finalized decision to
+#      ocsf-audit, which writes one NDJSON line to stderr.
+
+engine_settings:
+  # Steps name the plugins they run. The ocsf-audit sink is the exception:
+  # the executor calls it at every verdict, so no step names it.
+  dispatch: policy
+  # Names the host: the executor stamps its streams praxis-gw-1:decision /
+  # praxis-gw-1:effect. The epoch is the executor's boot time, so a restart
+  # opens a new epoch with stream_seq back at 0.
+  audit_stream_namespace: praxis-gw-1
+  # Entry and emission digests at unmapped."aid.content", so a record shows
+  # whether the gateway changed the payload (the redaction beat).
+  capture_content_provenance: true
+  #
+  # Plain SHA-256 for the demo. Production names an HMAC key from
+  # `secrets:` so nobody holding a record can test guesses at a redacted
+  # SSN, but Praxis 0.7.4 registers no secret provider backends with the
+  # engine it builds, so a keyed digest cannot load here yet. See README
+  # "Known issues".
+  content_provenance_key: unkeyed
+
+plugins:
+  - name: jwt-user
+    kind: identity/jwt
+    hooks: [identity.resolve]
+    mode: sequential
+    on_error: fail
+    capabilities: [perform_http]
+    config:
+      role: user
+      header: X-User-Token
+      trusted_issuers:
+        - issuer: "http://localhost:8081/realms/cpex-demo"
+          audiences: ["praxis-gateway"]
+          algorithms: ["RS256"]
+          decoding_key:
+            kind: jwks_url
+            url: "http://localhost:8081/realms/cpex-demo/protocol/openid-connect/certs"
+            insecure_http: true   # localhost dev only
+          leeway_seconds: 60
+      claim_mapper: standard
+
+  - name: jwt-client
+    kind: identity/jwt
+    hooks: [identity.resolve]
+    mode: sequential
+    on_error: fail
+    capabilities: [perform_http]
+    config:
+      role: client
+      header: Authorization
+      trusted_issuers:
+        - issuer: "http://localhost:8081/realms/cpex-demo"
+          audiences: ["praxis-gateway", "account"]
+          algorithms: ["RS256"]
+          decoding_key:
+            kind: jwks_url
+            url: "http://localhost:8081/realms/cpex-demo/protocol/openid-connect/certs"
+            insecure_http: true
+          leeway_seconds: 60
+      claim_mapper: standard
+
+  # RFC 8693 token exchange: the user's token becomes a workday-api token
+  # before get_compensation reaches the upstream. The delegation lands in
+  # the OCSF record's `delegation` block.
+  - name: workday-oauth
+    kind: delegator/oauth
+    hooks: [token.delegate]
+    mode: sequential
+    on_error: fail
+    capabilities:
+      - perform_http
+      - read_inbound_credentials
+      - write_delegated_tokens
+    config:
+      token_endpoint: "http://localhost:8081/realms/cpex-demo/protocol/openid-connect/token"
+      insecure_http: true
+      client_id: "praxis-gateway"
+      client_secret_source:
+        kind: literal              # demo realm secret; use env_var or file elsewhere
+        secret: "praxis-gateway-secret"
+      timeout_seconds: 5
+      default_outbound_header: "Authorization"
+
+  # Refuses any outbound email whose arguments carry an SSN or card number.
+  - name: pii-scan
+    kind: validator/pii-scan
+    hooks: [cmf.tool_pre_invoke]
+    mode: sequential
+    on_error: fail
+    config:
+      detect:
+        - { kind: ssn }
+        - { kind: credit_card }
+      mode: deny
+
+  # The audit sink (praxis-proxy/policy reference/plugins/ocsf-audit).
+  - name: ocsf-audit
+    kind: audit/ocsf
+    mode: audit
+    # The plugin README's five, or the records silently lose actor / agent /
+    # delegation / label / workload evidence. read_subject alone exposes only
+    # the subject id, so read_roles and read_teams are added for
+    # actor.roles and actor.user.groups.
+    capabilities:
+      - read_subject
+      - read_roles
+      - read_teams
+      - read_agent
+      - read_delegation
+      - read_labels
+      - read_workload
+    config:
+      destination: stderr
+      chain: true
+      signing: dsse
+      # Path only: the factory rejects inline keys. run-demo.sh generates
+      # this PKCS#8 P-256 key on first run.
+      signing_key_pem_path: keys/ocsf-signing.pem
+      signing_key_id: praxis-audit-demo-1
+      authority_uid: praxis-audit-demo
+      # chain_uid left unset: the plugin mints one per process, so a
+      # restart never reuses record uids.
+
+global:
+  authentication:
+    - jwt-user
+    - jwt-client
+
+  pdp:
+    - kind: cel
+      on_error: deny
+
+  # Taint labels persist here, keyed by H(subject : X-Session-Id).
+  session_store:
+    kind: valkey
+    endpoint: localhost:6379
+
+routes:
+  # Reading an internal wiki page. Allowed for any authenticated caller.
+  - tool: fetch_doc
+    authorization:
+      pre_invocation:
+        - "require(perm.tool_execute)"
+
+  - tool: get_compensation
+    authorization:
+      pre_invocation:
+        - "require(role.hr)"
+        - "delegate(workday-oauth, target: workday-api, audience: workday-api, permissions: [read_compensation])"
+        - "taint(secret, session)"
+    args:
+      ssn: "str | redact(!perm.view_ssn)"
+    result:
+      ssn: "str | redact(!perm.view_ssn)"
+
+  - tool: send_email
+    authorization:
+      pre_invocation:
+        - "require(perm.email_send)"
+        - "security.labels contains \"secret\": deny('external email blocked: this session accessed secret data', 'session_tainted_secret')"
+        - cel:
+            expr: 'args.to.endsWith("@corp.com")'
+            on_deny:
+              - "deny('email to a non-corporate recipient', 'external_recipient')"
+        - "run(pii-scan)"

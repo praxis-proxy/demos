@@ -1,0 +1,57 @@
+# Praxis gateway for the praxis-audit demo.
+#
+# A stock Praxis server (crates.io praxis-proxy 0.7.4, policy filter on) with
+# two host-registered policy plugins the engine does not bundle:
+#
+#   audit/ocsf          reference/plugins/ocsf-audit   (praxis-proxy/policy #171)
+#   validator/pii-scan  reference/plugins/pii-scanner
+#
+# and one small HTTP filter, `mcp_classify`, that stamps `mcp.method` /
+# `mcp.name` so the policy filter can route tool calls. It stands in for the
+# `mcp` classifier in praxis-proxy/ai, which is unpublished and pulls the
+# whole AI gateway in.
+#
+# Praxis pins praxis-policy 0.4.1 from crates.io. The OCSF sink is only on
+# praxis-proxy/policy main, so `[patch.crates-io]` swaps every PPE crate for
+# the same pinned commit. Both sides then share one praxis-policy-core and
+# the sink's `AuditHandler` is the one the executor calls.
+#
+# The pin is praxis-proxy/policy main (de93b87, the #171 merge) plus one fix
+# on Levaj2000/policy: under `dispatch: policy` the APL visitor rejected a
+# hookless audit sink as "can never run", so the sink could not load beside
+# any route. Repin to praxis-proxy/policy once that fix lands upstream.
+
+[package]
+name = "praxis-audit-gateway"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+license = "Apache-2.0"
+publish = false
+
+# Standalone: not a member of the ledger crate's build.
+[workspace]
+
+[dependencies]
+async-trait = "0.1"
+bytes = "1"
+praxis = { package = "praxis-proxy", version = "=0.7.4" }
+praxis-core = { package = "praxis-proxy-core", version = "=0.7.4" }
+praxis-filter = { package = "praxis-proxy-filter", version = "=0.7.4" }
+serde_json = "1"
+serde_yaml = { package = "yaml_serde", version = "0.10" }
+
+ocsf-audit = { package = "praxis-policy-plugin-ocsf-audit", git = "https://github.com/Levaj2000/policy", rev = "3b72d5f7d35a3bce8ca47204fb5169496e9155d9" }
+pii-scanner = { package = "praxis-policy-plugin-pii-scanner", git = "https://github.com/Levaj2000/policy", rev = "3b72d5f7d35a3bce8ca47204fb5169496e9155d9" }
+
+[patch.crates-io]
+praxis-policy = { git = "https://github.com/Levaj2000/policy", rev = "3b72d5f7d35a3bce8ca47204fb5169496e9155d9" }
+praxis-policy-core = { git = "https://github.com/Levaj2000/policy", rev = "3b72d5f7d35a3bce8ca47204fb5169496e9155d9" }
+praxis-policy-orchestration = { git = "https://github.com/Levaj2000/policy", rev = "3b72d5f7d35a3bce8ca47204fb5169496e9155d9" }
+praxis-policy-apl-core = { git = "https://github.com/Levaj2000/policy", rev = "3b72d5f7d35a3bce8ca47204fb5169496e9155d9" }
+praxis-policy-apl-cmf = { git = "https://github.com/Levaj2000/policy", rev = "3b72d5f7d35a3bce8ca47204fb5169496e9155d9" }
+praxis-policy-apl-runtime = { git = "https://github.com/Levaj2000/policy", rev = "3b72d5f7d35a3bce8ca47204fb5169496e9155d9" }
+praxis-policy-builtins = { git = "https://github.com/Levaj2000/policy", rev = "3b72d5f7d35a3bce8ca47204fb5169496e9155d9" }
+
+[profile.release]
+debug = false

@@ -1,0 +1,10 @@
+# records, logs, pid
+out/
+# the generated signing key
+keys/
+# the pinned ledger checkout (tools/fetch-ledger.sh)
+.ledger/
+gateway/target/
+__pycache__/
+*.pyc
+.venv/
