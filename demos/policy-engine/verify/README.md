@@ -1,3 +1,23 @@
+# Creating a free trial of IBM Verify tenant
+Visit URL: https://www.ibm.com/products/verify?lnk=L0G in a browser and click on the blue, "Start a free trial" push-button.
+Login using your IBMiD and provide your desired hostname (in this demo, "praxis-1.verify.ibm.com" is the tenant). 
+Once the tenant has been provisioned, login to the instance and access the admin ui. e.g. [https://praxis-1.verify.ibm.com/ui/admin](https://praxis-1.verify.ibm.com/ui/admin)
+## Create an API client for tenant provisioning
+- Expand the "Security" section in the left-hand navigation pane and click on "API access".
+- Click the blue, "Add API client +" push-button.
+  - Click the "Permission name" checkbox to assign all entitilements to the API client.
+  - On the "API credentials" page, take the defaults and click the "Next" push-button
+  - On the "Custom scopes" page, click the "Next" push-button
+  - On the "IP filter" page, click the "Next" push-button
+  - On the "Additional properties" page, click the "Next" push-button
+  - On the "Confirm Configuration" page, enter the name, "VERIFY_ADMIN_CLIENT_ID" and press the blue, "Create API client" push-button
+- Copy the file .env.verify.example to .env.verify
+- Copy the client ID (generated on save of the API client in the previous step) as VERIFY_ADMIN_CLIENT_ID= value in .env.verify
+- Copy the client secret as VERIFY_ADMIN_CLIENT_SECRET= value in .env.verify
+- Create the post_deploy_variables.json file:
+```bash
+echo '{ "variables": {"IBM_VERIFY_TOKEN_ENDPOINT": "https://<your_company_name>.verify.ibm.com/oauth2/token"}}' > post_deploy_variables.json
+```
 # Verify tenant provisioning
 
 Provisions the demo into an IBM Verify tenant — the four personas and the OAuth
@@ -225,13 +245,10 @@ tokens (`CSIAQ5207E`), the same split the realm export already has.
 
 `github-api` and `workday-api` are **not clients** on Verify — they are audience
 strings in the exchange client's `audiences` list. `clients.csv` registers them
-anyway so the console shows the same four names a viewer sees in Keycloak, but
-this does **not** make Verify honor a requested `audience` (delta **V1**: Verify
-stamps the exchanging client's fixed list and silently accepts unregistered
-audiences), and it does **not** reproduce Keycloak's per-audience
-`gh-permissions-as-scope` mapper, which is what makes scenario 4's assertion
-load-bearing there. Nothing in the demo authenticates as either one. They cannot
-be pure placeholders either — Verify rejects an application with every grant type
+anyway so the console shows the same four names a viewer sees in Keycloak. and it
+does reproduce Keycloak's per-audience `gh-permissions-as-scope` mapper, which is
+what makes scenario 4's assertion load-bearing there. Nothing in the demo authenticates as either one.
+They cannot be pure placeholders either — Verify rejects an application with every grant type
 disabled (`CSIAQ0032`) — so each carries `clientCredentials` and nothing else.
 Delete those two rows if you would rather the console show only what
 participates; the demo behaves identically.

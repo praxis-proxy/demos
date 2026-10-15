@@ -3,10 +3,10 @@
 # direct password-grant endpoint. Echoes the raw JWT on stdout.
 #
 # Usage:
-#   ./mint-token.sh alice            # prints alice's user token
-#   ./mint-token.sh hr-copilot       # prints the hr-copilot client's
-#                                    # service-account token (used as
-#                                    # the gateway-Authorization)
+#   ./mint-verify-token.sh alice       # prints alice's user token
+#   ./mint-verify-token.sh hr-copilot  # prints the hr-copilot client's
+#                                      # service-account token (used as
+#                                      # the gateway-Authorization)
 #
 # Personas:
 #   alice    — engineer, role=engineer,  perms=[tool_execute]
