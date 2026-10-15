@@ -1,0 +1,67 @@
+# Rendered to .state/policy.yaml by scripts/render-policy.sh.
+engine_settings:
+  dispatch: policy
+
+plugins:
+  - name: demo-user-jwt
+    kind: identity/jwt
+    hooks: [identity.resolve]
+    mode: sequential
+    on_error: fail
+    config:
+      role: user
+      header: X-User-Token
+      trusted_issuers:
+        - issuer: "https://ppe-vault-demo.local"
+          audiences: ["vault-demo"]
+          algorithms: ["RS256"]
+          decoding_key:
+            kind: pem
+            pem: |
+__DEMO_PUBLIC_KEY__
+          leeway_seconds: 30
+      claim_mapper: standard
+
+  - name: github-vault
+    kind: delegator/vault
+    hooks: [token.delegate]
+    mode: sequential
+    on_error: fail
+    capabilities:
+      - perform_http
+      - read_inbound_credentials
+      - read_subject
+      - read_claims
+      - write_delegated_tokens
+    config:
+      vault_addr: "http://127.0.0.1:8200"
+      insecure_http: true
+      kv_mount: secret
+      secret_path_template: "agents/{{identity}}/github"
+      secret_field: token
+      outbound_header: Authorization
+      # Praxis preserves this configured prefix when it constructs the header.
+      scheme_prefix: "Bearer "
+      timeout_seconds: 5
+      auth:
+        user:
+          method: jwt
+          identity_claim: sub
+          mount: jwt
+          role: ppe-user
+
+global:
+  authentication: [demo-user-jwt]
+
+routes:
+  - tool: github_whoami
+    authorization:
+      pre_invocation:
+        - "require(authenticated)"
+        - "delegate(github-vault, target: github-api, audience: https://api.github.com, subject: user)"
+
+  - tool: github_denied
+    authorization:
+      pre_invocation:
+        - "deny('demo policy blocked this request before Vault', 'demo.policy_denied')"
+        - "delegate(github-vault, target: github-api, audience: https://api.github.com, subject: user)"

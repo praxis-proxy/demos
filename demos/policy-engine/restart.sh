@@ -19,6 +19,7 @@
 # Usage (from this directory):
 #   ./restart.sh
 #   REBUILD_IMAGES=1 ./restart.sh   # force-rebuild container images first
+#   WITH_SPIRE=1 ./restart.sh       # also bring up the SPIRE overlay (scenario 13)
 #
 # `docker compose up -d` builds any *missing* images (Keycloak + the CIBA
 # SPI, auth-channel, hr-mcp) but reuses existing ones. The gateway binary is
@@ -55,6 +56,23 @@ if [ -f .env.verify ]; then
   # shellcheck disable=SC1091
   . ./.env.verify
   set +a
+fi
+# Optional SPIRE overlay for workload identity (scenario 13). WITH_SPIRE=1 adds
+# docker-compose.spire.yml to every compose call, which also turns on Keycloak's
+# SPIFFE feature, and configures the realm to trust SPIRE once Keycloak is up.
+# Without it the stack is exactly the base demo, and any SPIRE containers left
+# from an earlier run are removed by `down --remove-orphans`.
+WITH_SPIRE="${WITH_SPIRE:-0}"
+COMPOSE=(docker compose)
+if [ "$WITH_SPIRE" = "1" ]; then
+  COMPOSE+=(-f docker-compose.yml -f docker-compose.spire.yml)
+fi
+# The SPIRE agent and the workloads container sit under the `attestation`
+# profile, because the agent needs a join token that only exists once the
+# server is up (step 5b). Teardown names the profile so they go too.
+DOWN=("${COMPOSE[@]}")
+if [ "$WITH_SPIRE" = "1" ]; then
+  DOWN+=(--profile attestation)
 fi
 # The gateway's config watcher watches the *directory* holding the config, not
 # the config files themselves, and fires on any event in it. On Linux (raw
@@ -172,17 +190,17 @@ fi
 
 # 2. docker compose down -v.
 step "docker compose down -v (wiping Keycloak + MCP volumes)"
-docker compose down -v
+"${DOWN[@]}" down -v --remove-orphans
 ok "containers + volumes removed"
 
 # 3. (optional) rebuild container images, then docker compose up -d.
 if [ "$REBUILD_IMAGES" = "1" ]; then
   step "docker compose build (REBUILD_IMAGES=1 — rebuilding Keycloak+SPI, auth-channel, hr-mcp)"
-  docker compose build
+  "${DOWN[@]}" build
   ok "images rebuilt"
 fi
 step "docker compose up -d (fresh start; realm import begins)"
-docker compose up -d
+"${COMPOSE[@]}" up -d
 ok "containers starting"
 
 # 4. Wait for Keycloak's OIDC discovery endpoint.
@@ -221,6 +239,37 @@ if ./verify-token-exchange.sh >/dev/null 2>&1; then
 else
   warn "verify-token-exchange.sh failed — investigate before running scenarios:"
   ./verify-token-exchange.sh || true
+fi
+
+# 5b. (WITH_SPIRE=1) wait for SPIRE's published keys, join the SPIRE agent to
+# the server, register the workloads, then register SPIRE as a SPIFFE identity
+# provider and create the agent's federated client.
+if [ "$WITH_SPIRE" = "1" ]; then
+  step "configuring the SPIRE overlay (agent, workloads, SPIFFE IdP, federated client)"
+  deadline=$(( $(date +%s) + 60 ))
+  while ! curl -fsS http://localhost:8443/keys >/dev/null 2>&1; do
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      die "SPIRE keys not published after 60s — check '${COMPOSE[*]} logs spire-oidc'"
+    fi
+    printf "."
+    sleep 2
+  done
+  printf "\n"
+  # Node attestation: the agent trusts only the bundle exported here, and
+  # proves itself to the server with a one-time join token. The token's
+  # -spiffeID gives the node a stable ID for registration entries to name.
+  SPIRE_SERVER=("${COMPOSE[@]}" exec -T spire-server /opt/spire/bin/spire-server)
+  "${SPIRE_SERVER[@]}" bundle show > spire/agent/bootstrap.crt
+  SPIRE_JOIN_TOKEN=$("${SPIRE_SERVER[@]}" token generate \
+    -spiffeID spiffe://policy.demo/node/demo-host | awk '{print $2}')
+  [ -n "$SPIRE_JOIN_TOKEN" ] || die "spire-server generated no join token"
+  SPIRE_JOIN_TOKEN="$SPIRE_JOIN_TOKEN" "${COMPOSE[@]}" --profile attestation \
+    up -d spire-agent workloads >/dev/null 2>&1 \
+    || die "SPIRE agent did not start — check '${COMPOSE[*]} --profile attestation logs spire-agent'"
+  ./spire/register-workloads.sh >/dev/null
+  ./spire/setup-spiffe-idp.sh >/dev/null
+  ./spire/configure-federated-client.sh >/dev/null
+  ok "SPIRE agent joined, workloads registered, SPIFFE IdP and hr-copilot-agent client configured"
 fi
 
 # 6. Start the gateway, tee its output to ./gateway.log, wait for :8090.

@@ -28,3 +28,6 @@ post_deploy_variables.json
 policy-verify-opa.yaml
 policy-verify-cel.yaml
 policy-verify-cedar.yaml
+
+# SPIRE server bundle exported by restart.sh for the agent to bootstrap from
+spire/agent/bootstrap.crt

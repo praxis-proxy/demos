@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Praxis Contributors
+
+services:
+  vault:
+    image: hashicorp/vault:2.1.1
+    cap_add:
+      - IPC_LOCK
+    command:
+      - server
+      - -dev
+      - -dev-root-token-id=demo-root
+      - -dev-listen-address=0.0.0.0:8200
+    environment:
+      VAULT_ADDR: http://127.0.0.1:8200
+    ports:
+      - 127.0.0.1:8200:8200
+    healthcheck:
+      test: [CMD, vault, status, -address=http://127.0.0.1:8200]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  github-bridge:
+    build:
+      context: bridge
+    environment:
+      GITHUB_API_BASE: ${GITHUB_API_BASE:-https://api.github.com}
+    ports:
+      - 127.0.0.1:9100:9100
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/healthz')"
+      interval: 2s
+      timeout: 2s
+      retries: 30
