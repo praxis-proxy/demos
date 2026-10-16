@@ -42,11 +42,15 @@ fi
 
 step "Agent (workload) → get_headcount with its SPIFFE JWT-SVID (no user token)"
 
-SVID=$("$DEMO_DIR/spire/fetch-svid.sh" "$WORKLOAD_UID" "$REALM_ISSUER" 2>/dev/null) || true
+FETCH_ERR=$(mktemp)
+SVID=$("$DEMO_DIR/spire/fetch-svid.sh" "$WORKLOAD_UID" "$REALM_ISSUER" 2>"$FETCH_ERR") || true
 if [ -z "$SVID" ]; then
-  fail_ "SPIRE issued no SVID to uid $WORKLOAD_UID"
+  fail_ "SPIRE issued no SVID to uid $WORKLOAD_UID: $(cat "$FETCH_ERR")"
+  note "check the agent: docker compose -f docker-compose.yml -f docker-compose.spire.yml --profile attestation logs spire-agent"
+  rm -f "$FETCH_ERR"
   finish
 fi
+rm -f "$FETCH_ERR"
 
 reset_upstream
 RAW=$(curl -isS --max-time 20 -X POST "$GATEWAY/mcp" \
