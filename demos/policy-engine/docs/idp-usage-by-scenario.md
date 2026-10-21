@@ -1,4 +1,4 @@
-# Keycloak and IBM Verify across the 12 scenarios
+# Keycloak and IBM Verify across the scenarios
 
 Which IdP each scenario touches, and *where* in the request path it touches it.
 
@@ -82,24 +82,37 @@ flowchart TB
     subgraph D["Keycloak only"]
         direction TB
         S11["11 · manager approval<br/>adjust_compensation $25k<br/>CIBA + auth-channel :5001"]
+        S13["13 · workload identity<br/>get_headcount<br/>SPIFFE JWT-SVID + SPIRE"]
+        S11 ~~~ S13
+    end
+
+    subgraph E["IBM Verify only"]
+        direction TB
+        S14["14 · agent identity<br/>search_repos_agent<br/>Agent Registry status"]
     end
 
     NA["IdP used to mint and validate only.<br/>No exchange · upstream never called."]
     NB["Keycloak/Verify: audience-scoped token."]
     NC["Route has no delegate step,<br/>so both IdPs behave identically."]
     ND["Verify works via<br/>policy-verify-opa-ciba.yaml.tmpl.<br/>Requires valid e-mail address for eve to approve CIBA"]
+    NE["Keycloak's SPIFFE-native client auth<br/>(providerId: spiffe) has no Verify<br/>counterpart. Needs WITH_SPIRE=1."]
+    NF["Verify's Agent Registry has no Keycloak<br/>counterpart. The gateway reads<br/>/v1.0/Agents and denies unless ACTIVE."]
 
     S08 --> NA
     S12 --> NB
     S10 --> NC
     S11 --> ND
+    S13 --> NE
+    S14 --> NF
 
     classDef both fill:#1f4e79,stroke:#0d2b45,color:#fff
     classDef kconly fill:#7a2f8f,stroke:#45194f,color:#fff
+    classDef iv fill:#1f6f4a,stroke:#0d3b27,color:#fff
     classDef note fill:#f5f5f5,stroke:#999,color:#222
     class S01,S02,S03,S04,S05,S06,S07,S08,S09,S10,S12 both
-    class S11 kconly
-    class NA,NB,NC,ND note
+    class S11,S13 kconly
+    class S14 iv
+    class NA,NB,NC,ND,NE,NF note
 ```
 
 ## Narration deltas on the Verify path
@@ -118,3 +131,30 @@ Neither changes a scenario's pass/fail, both change what can honestly be said:
   issued itself (`CSIAQ5207E`), so minting uses `HR_COPILOT_CLIENT_ID` and
   exchange uses `VERIFY_GATEWAY_CLIENT_ID` — the same split as Keycloak's
   `hr-copilot` mints / `praxis-gateway` exchanges.
+
+## Agent identity: why 13 and 14 do not port
+
+These two are the only scenarios bound to one IdP by *capability* rather than by
+configuration, and they are bound in opposite directions.
+
+| | 13 — SPIFFE workload identity | 14 — Verify agent identity |
+|---|---|---|
+| Credential | SPIFFE JWT-SVID, `X-Workload-Token` | OIDC JWT from `client_credentials`, `X-Agent-Token` |
+| Issued because | SPIRE attested the process | the agent's OAuth client authenticated |
+| IdP mechanism | Keycloak `providerId: spiffe` + `client_assertion_type: …jwt-spiffe` | Agent Registry record (`/v1.0/Agents`) linked to the client |
+| Answers | "is this really the agent?" | "is this agent approved to act?" |
+| Revocation | remove the registration entry; existing SVIDs live out their TTL | flip status to `SUSPENDED`; the gateway refuses within its cache TTL |
+| Enforced by | Keycloak, at client authentication | **the gateway** — Verify does not gate issuance on status |
+| On the other IdP | no Verify counterpart | no Keycloak counterpart |
+
+The asymmetry in the "enforced by" row is the one that surprises people. A
+suspended Verify agent still mints tokens, and tokens minted before the suspend
+stay valid — so an agent's governance state is only load-bearing if something
+downstream of the IdP reads it. That is what `run(agent-status)` does, and it
+matches IBM's own guidance: their Agent-Identity-with-Vault cookbook has the
+token exchange succeed while the resource denies.
+
+Worth noting for later: Agent Registry records accept `authMethods` of type
+`svid-jwt` and `svid-x509`, so Verify can govern a SPIFFE identity rather than
+replace one. That would collapse the two columns above into a single story, and
+is the most interesting unexplored direction here.

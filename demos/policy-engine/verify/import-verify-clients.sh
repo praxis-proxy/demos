@@ -161,7 +161,7 @@
 #
 # The `ibmverify` claim-mapper preset fixes it at the source: it wraps a JSON
 # scalar into a one-element vec before the structured fields are read. The policy
-# selects it with `claim_mapper: ibmverify` on jwt-user and jwt-agent
+# selects it with `claim_mapper: ibmverify` on jwt-user and jwt-client
 # (policy-verify-opa.yaml.tmpl), so SET_CEL below no longer pads.
 #
 # Two consequences. Clients created by an OLDER copy of this script still carry
@@ -413,7 +413,7 @@ REQUIRED = ["name", "role"]
 FLAGS    = ["ropc", "client_creds", "token_exchange"]
 LISTS    = ["audiences", "claims"]
 OPTIONAL = ["pdv_id_key", "pdv_secret_key"]
-ROLES    = {"mint", "exchange", "audience"}
+ROLES    = {"mint", "exchange", "audience", "agent"}
 
 with open(sys.argv[1], newline="") as fh:
     # '##' lines are documentation, not data. Blank lines are skipped so the
@@ -1176,6 +1176,19 @@ create_clients() {
     # and no way to tell which one the config refers to.
     if existing=$(find_app "$name") && [ -n "$existing" ]; then
       warn "$name" "$(dim "exists (client_id=$(printf '%s' "$existing" | cut -f2)) — left unchanged; use --delete to replace")"
+      # The application itself is left alone, but ENTITLEMENT is repaired: it
+      # lives on a separate resource, and a tenant provisioned before the agent
+      # existed has the exchange client entitled per-persona, which the agent
+      # subject cannot satisfy (CSIAQ0279E). Re-running the importer should fix
+      # that rather than requiring --delete of a working client.
+      if [ "$role" = "exchange" ] && [ "$DO_ENTITLE" = true ]; then
+        local ag_rows
+        ag_rows=$(printf '%s' "$CLIENTS_JSON" | jq '[.[] | select(.role=="agent")] | length')
+        if [ "$ag_rows" -gt 0 ]; then
+          entitle_app "$(printf '%s' "$existing" | cut -f1)" "$name" \
+            || NEEDS_ENTITLEMENT+=("$name")
+        fi
+      fi
       continue
     fi
 
@@ -1200,10 +1213,16 @@ create_clients() {
         # or the client cannot mint (CSIAQ0279E). See the script header.
         # Both mint AND exchange need entitlement. The exchange was long assumed
         # not to ("nobody authenticates to it"), but an RFC 8693 exchange carries
-        # the SUBJECT's identity, so Verify checks that user against the exchange
-        # application as well — without it the exchange leg fails CSIAQ0279E even
-        # though the mint leg works. Verified on a live tenant. role=audience
-        # genuinely needs none: nothing ever presents a user to it.
+        # the SUBJECT's identity, so Verify checks that subject against the
+        # exchange application as well — without it the exchange leg fails
+        # CSIAQ0279E even though the mint leg works. Verified on a live tenant.
+        # role=audience genuinely needs none: nothing ever presents a subject
+        # to it.
+        #
+        # role=agent needs none of its OWN either — nothing authenticates TO the
+        # agent's client. But see entitle_app: when an agent row exists, the
+        # EXCHANGE client must be entitled by birthright rather than per-user,
+        # because the agent is the exchange subject and is not a persona user.
         if [ "$role" = "mint" ] || [ "$role" = "exchange" ]; then
           if [ "$DO_ENTITLE" = true ]; then
             if ! entitle_app "$id" "$name"; then
@@ -1317,6 +1336,45 @@ PY_INNER
 entitle_app() {
   local id="$1" name="$2" body payload_desc
 
+  # --------------------------------------------------------------------------
+  # The agent forces birthright on the EXCHANGE client
+  # --------------------------------------------------------------------------
+  # Application entitlement is checked against the exchange SUBJECT. The demo's
+  # per-user model grants it to each persona by SCIM id, which works for bob /
+  # alice / eve — and cannot work for the agent, which is an OAuth client, not
+  # a user in the directory. There is no SCIM id to add.
+  #
+  # So when a role=agent row exists, the exchange client is entitled by
+  # birthright (every principal in the tenant) instead. Without this, scenario
+  # 14's delegate step fails with:
+  #   CSIAQ0279E Only entitled users can single sign-on to the application.
+  # while scenarios 01-13 pass, because their subjects ARE personas. Verified
+  # on praxis-2: birthright on the exchange client fixes the agent exchange and
+  # leaves all three persona exchanges working.
+  #
+  # Scoped deliberately: only the exchange client, and only when an agent is
+  # being provisioned. The minting client keeps its explicit per-user grants,
+  # which is what makes "only these four personas can sign on" demonstrable.
+  local agent_rows
+  agent_rows=$(printf '%s' "$CLIENTS_JSON" | jq '[.[] | select(.role=="agent")] | length')
+  local this_role
+  this_role=$(printf '%s' "$CLIENTS_JSON" | jq -r --arg n "$name" '.[] | select(.name==$n) | .role')
+  if [ "$ALL_USERS" != true ] && [ "$agent_rows" -gt 0 ] && [ "$this_role" = "exchange" ]; then
+    _split_resp "$(api POST "/v1.0/owner/applications/$id/entitlements" \
+      '{"birthRightAccess":true,"requestAccess":false}')"
+    case "$RESP_STATUS" in
+      200|201|204)
+        ok "$name" "$(dim 'entitled: all principals (birthright) — required for the agent subject')"
+        return 0 ;;
+      *)
+        fail "$name" "entitlement HTTP $RESP_STATUS"
+        printf '%s\n' "$RESP_BODY" | jq . 2>/dev/null | sed 's/^/      /' \
+          || printf '      %s\n' "$RESP_BODY"
+        echo "$(dim '      Scenario 14 will fail at delegate with CSIAQ0279E until this succeeds.')"
+        return 1 ;;
+    esac
+  fi
+
   if [ "$ALL_USERS" = true ]; then
     body='{"birthRightAccess":true,"requestAccess":false}'
     payload_desc="all tenant users (birthright)"
@@ -1380,8 +1438,400 @@ entitle_app() {
 # exchange client_id from GATEWAY_CLIENT_ID in this same file (or from
 # $VERIFY_GATEWAY_CLIENT_ID). restart.sh renders it on every Verify run, so a
 # write-back here is all that is needed for the new id to reach the gateway.
+# ==========================================================================
+# Agent Registry (scenario 14)
+# ==========================================================================
+# The second half of role=agent. The OAuth client above is what the agent
+# AUTHENTICATES as; the Agent Registry record is what it IS to governance —
+# display name, owner, tags, and a lifecycle status an admin flips in the
+# console.
+#
+# Four tenant behaviors are load-bearing here. Each was verified against
+# praxis-2 and each breaks the demo quietly if ignored:
+#
+#   1. CREATE ALWAYS LANDS IN `UNDER_REVIEW`. POST /v1.0/Agents ignores the
+#      `status` field entirely — sending "ACTIVE" explicitly still stores
+#      UNDER_REVIEW (measured on praxis-2; the brainstorm's finding E8 assumed
+#      an explicit value was enough, and it is not). Only PUT honors a status
+#      change. So create_agents() POSTs and then PROMOTES with a follow-up PUT,
+#      and reports loudly if the promotion does not take — a demo whose agent
+#      silently starts un-approved would look like the kill switch is stuck on.
+#   2. `oauthClients[0].issuer` is REQUIRED (CSINH2100E otherwise) and is
+#      tenant-specific: on praxis-2 it is the token issuer,
+#      <tenant>/oauth2. Derived below, never hardcoded.
+#   3. `oauthClients` is WRITE-ONLY. It reads back as null on GET and on LIST
+#      even immediately after a 201/200 that accepted it. So association is
+#      verified by the write's status code and NOT by reading it back; a
+#      read-back check here would always "fail" against a correct tenant.
+#   4. PUT is a FULL REPLACE. A PUT that omits description/tags/oauthClients
+#      clears them. set_agent_status() therefore re-sends the whole record.
+#
+# Early Access: a tenant without Agent Registry answers 403/404 on
+# /v1.0/Agents. That must not fail the client import, so every call here warns
+# and continues rather than dying.
+
+# The Agents API speaks SCIM, which api() does not: it sends
+# `Accept: application/json`. Hence a sibling rather than a reuse.
+agents_api() {
+  local method="$1" path="$2" body="${3:-}"
+  local -a args=(-sS -o - -w $'\n%{http_code}' -X "$method" "${TENANT_URL}${path}"
+    -H "Authorization: Bearer $ACCESS_TOKEN"
+    -H "Accept: application/scim+json")
+  if [ -n "$body" ]; then
+    args+=(-H "Content-Type: application/scim+json" --data "$body")
+  fi
+  curl "${args[@]}"
+}
+
+# The `issuer` an oauthClients entry must carry. Behavior 2 above.
+agent_client_issuer() {
+  printf '%s/oauth2' "$TENANT_URL"
+}
+
+# Find an agent record by displayName. Used for idempotence and for --delete.
+# Prints "<id>" on success; empty when absent.
+find_agent() {
+  local want="$1"
+  _split_resp "$(agents_api GET "/v1.0/Agents?count=200")"
+  case "$RESP_STATUS" in
+    200) ;;
+    *)   return 1 ;;
+  esac
+  printf '%s' "$RESP_BODY" | jq -r --arg n "$want" \
+    '[.Resources[]? | select(.displayName==$n) | .id] | .[0] // empty'
+}
+
+agent_payload() {
+  local name="$1" client_id="$2" status="${3:-ACTIVE}"
+  jq -nc \
+    --arg name "$name" \
+    --arg cid "$client_id" \
+    --arg iss "$(agent_client_issuer)" \
+    --arg status "$status" \
+    '{
+      schemas: ["urn:ietf:params:scim:schemas:core:ibm:2.0:Agent"],
+      displayName: $name,
+      description: "Policy-engine demo agent principal — created by verify/import-verify-clients.sh",
+      # Behavior 1: explicit, or the tenant stores UNDER_REVIEW.
+      status: $status,
+      # Behavior 2: issuer is required and tenant-specific.
+      oauthClients: [{
+        issuer: $iss,
+        clientId: $cid,
+        purposes: ["agent_id", "authentication"]
+      }],
+      tags: ["policy-engine-demo", "scenario-14"]
+    }'
+}
+
+# Create the record for each role=agent row and associate its OAuth client.
+# Appends "<name>\t<agent_id>" to AGENTS_CREATED for write-back.
+declare -a AGENTS_CREATED=()
+# "<client_id>\t<secret>" for the readAgents-only client, when one was made.
+READER_CREATED=""
+OPERATOR_CREATED=""
+
+# --------------------------------------------------------------------------
+# The gateway's own credential: a readAgents-only API client
+# --------------------------------------------------------------------------
+# The gateway must read /v1.0/Agents/{id} on the request path to enforce agent
+# status. Handing it the admin API client for that would be wrong: that client
+# carries ~40 entitlements including writeAgents and agentOwner, so a gateway
+# compromise would mean an attacker could rewrite the very records that are
+# supposed to govern it — and silently re-enable a suspended agent.
+#
+# So provisioning mints a dedicated API client holding exactly ONE entitlement,
+# `readAgents`. Verified against praxis-2: with it the gateway can GET an agent
+# record (200) and can do nothing else — PUT /v1.0/Agents is 403, POST
+# /v2.0/Users is 403, GET /v1.0/applications is 403.
+#
+# The admin pair goes back to being provisioning-only, which is what the rest of
+# this script already assumes.
+#
+# Two API details worth knowing:
+#   - POST /v1.0/apiclients returns 201 with an EMPTY body, so the client has to
+#     be found by name afterwards.
+#   - the secret is not in the collection listing, only on
+#     GET /v1.0/apiclients/{id}. Which is also why this is readable at all:
+#     there is no "show secret once" semantics to miss.
+READER_CLIENT_NAME="${READER_CLIENT_NAME:-praxis-agent-status-reader}"
+# The OPERATOR credential: status changes only, used by
+# verify/set-agent-status.sh (and by a human mid-demo). Deliberately a SECOND
+# client rather than another entitlement on the reader above.
+#
+# Splitting them is the whole point. `manageAgentStatus` can flip an agent back
+# to ACTIVE, so a gateway holding it could re-enable the agent its own policy
+# just suspended — the kill switch would be its own bypass. Verified on
+# praxis-2: the reader gets 403 on PUT /v1.0/Agents, and the operator gets 403
+# on everything except a status change.
+OPERATOR_CLIENT_NAME="${OPERATOR_CLIENT_NAME:-praxis-agent-status-operator}"
+
+find_api_client() {
+  local want="$1"
+  _split_resp "$(api GET "/v1.0/apiclients?limit=200")"
+  [ "$RESP_STATUS" = "200" ] || return 1
+  printf '%s' "$RESP_BODY" | jq -r --arg n "$want" \
+    '[.apiClients[]? | select(.clientName==$n) | .id] | .[0] // empty'
+}
+
+# Creates an agent-status API client when absent and reads back its
+# credentials. Takes the client name, the single entitlement it must hold, and
+# the name of the global to stash "<client_id>\t<secret>" into.
+#
+# Parameterised rather than duplicated because the two clients differ in
+# exactly one field, and a copy-paste pair would drift.
+_create_status_client() {
+  local name="$1" entitlement="$2" out_var="$3"
+  local body id
+
+  body=$(jq -nc --arg name "$name" --arg ent "$entitlement" '{
+    clientName: $name,
+    enabled: true,
+    entitlements: [$ent],
+    additionalConfig: { clientAuthMethod: "default" }
+  }')
+
+  if [ "$DRY_RUN" = true ]; then
+    ok "$name" "$(dim "(dry-run) would POST /v1.0/apiclients — $entitlement only")"
+    return 0
+  fi
+
+  if id=$(find_api_client "$name") && [ -n "$id" ]; then
+    warn "$name" "$(dim "exists (id=$id) — left unchanged; use --delete to replace")"
+  else
+    _split_resp "$(api POST "/v1.0/apiclients" "$body")"
+    case "$RESP_STATUS" in
+      200|201)
+        # 201 carries no body, so the id comes from a lookup by name.
+        if ! id=$(find_api_client "$name") || [ -z "$id" ]; then
+          fail "$name" 'created but could not be found by name afterwards'
+          return 0
+        fi
+        ;;
+      403)
+        warn "$name" "$(dim 'HTTP 403 — the admin client cannot create API clients')"
+        echo "$(dim '      Grant it "Manage API clients", or create this client by hand with the')"
+        echo "$(dim "      single entitlement $entitlement and set its id/secret in .env.verify.")"
+        return 0 ;;
+      *)
+        fail "$name" "HTTP $RESP_STATUS"
+        printf '%s\n' "$RESP_BODY" | jq . 2>/dev/null | sed 's/^/      /' \
+          || printf '      %s\n' "$RESP_BODY"
+        return 0 ;;
+    esac
+  fi
+
+  # The secret lives only on the single-client GET, not in the listing.
+  _split_resp "$(api GET "/v1.0/apiclients/$id")"
+  if [ "$RESP_STATUS" != "200" ]; then
+    fail "$name" "could not read back credentials (HTTP $RESP_STATUS)"
+    return 0
+  fi
+  local cid secret ents
+  cid=$(printf '%s' "$RESP_BODY" | jq -r '.clientId // empty')
+  secret=$(printf '%s' "$RESP_BODY" | jq -r '.clientSecret // empty')
+  ents=$(printf '%s' "$RESP_BODY" | jq -r '[.entitlements[]?] | join(",")')
+  if [ -z "$cid" ] || [ -z "$secret" ]; then
+    fail "$name" 'credentials incomplete — set them by hand in .env.verify'
+    return 0
+  fi
+  # Assert the blast radius rather than trusting the create: a client that came
+  # back with more than it asked for is not the credential this is meant to be.
+  if [ "$ents" = "$entitlement" ]; then
+    ok "$name" "$(dim "client_id=${cid} — entitlements: $entitlement only")"
+  else
+    warn "$name" "$(dim "client_id=${cid} — UNEXPECTED entitlements: ${ents:-none}")"
+    echo "$(dim "      Expected $entitlement alone. Narrow it in the console before relying on it.")"
+  fi
+  # Indirect assignment: bash 3.2 (stock macOS) has no nameref, so this is the
+  # portable form. Values are a tenant UUID and its secret, neither of which
+  # can contain a quote, and both come from jq rather than from user input.
+  eval "$out_var=\"\$cid\"\$'\\t'\"\$secret\""
+}
+
+# Both agent-status credentials. The split is a security boundary, not tidiness:
+#
+#   reader   readAgents         the GATEWAY, on the request path. Can read an
+#                               agent record and nothing else.
+#   operator manageAgentStatus  verify/set-agent-status.sh and a human admin.
+#                               Can change status and nothing else — not even
+#                               rename the agent (403 CSINH2507E).
+#
+# Neither can do the other's job, so a compromised gateway cannot undo a
+# suspension and the operator credential cannot be used to read traffic.
+create_status_clients() {
+  local agent_rows
+  agent_rows=$(printf '%s' "$CLIENTS_JSON" | jq '[.[] | select(.role=="agent")] | length')
+  # No agent, no agent-status credentials: they exist only for scenario 14.
+  [ "$agent_rows" -gt 0 ] || return 0
+
+  echo
+  echo "$(dim 'Agent-status credentials') $(dim "-> ${TENANT_URL}/v1.0/apiclients")"
+  _create_status_client "$READER_CLIENT_NAME"   readAgents        READER_CREATED
+  _create_status_client "$OPERATOR_CLIENT_NAME" manageAgentStatus OPERATOR_CREATED
+}
+
+delete_status_clients() {
+  local name id
+  for name in "$READER_CLIENT_NAME" "$OPERATOR_CLIENT_NAME"; do
+    if [ "$DRY_RUN" = true ]; then
+      ok "$name" "$(dim '(dry-run) would DELETE /v1.0/apiclients/<id>')"
+      continue
+    fi
+    if ! id=$(find_api_client "$name") || [ -z "$id" ]; then
+      warn "$name" "$(dim 'not present — nothing to delete')"
+      continue
+    fi
+    _split_resp "$(api DELETE "/v1.0/apiclients/$id")"
+    case "$RESP_STATUS" in
+      200|204) ok   "$name" "$(dim "deleted (id=$id)")" ;;
+      404)     warn "$name" "$(dim 'already gone')" ;;
+      *)       fail "$name" "HTTP $RESP_STATUS" ;;
+    esac
+  done
+}
+
+create_agents() {
+  local i name role cid body existing
+  local any=false
+  for i in $(seq 0 $((CLIENT_COUNT - 1))); do
+    role=$(printf '%s' "$CLIENTS_JSON" | jq -r ".[$i].role")
+    [ "$role" = "agent" ] || continue
+    name=$(printf '%s' "$CLIENTS_JSON" | jq -r ".[$i].name")
+
+    if [ "$any" = false ]; then
+      echo
+      echo "$(dim 'Agent Registry') $(dim "-> ${TENANT_URL}/v1.0/Agents")"
+      any=true
+    fi
+
+    # The client_id this run created, or the one already in the PDV file.
+    cid=""
+    local entry
+    for entry in ${CREATED[@]+"${CREATED[@]}"}; do
+      if [ "${entry%%$'\t'*}" = "$name" ]; then
+        cid=$(printf '%s' "$entry" | cut -f2)
+        break
+      fi
+    done
+    if [ -z "$cid" ] && [ -f "$PDV" ]; then
+      local id_key
+      id_key=$(printf '%s' "$CLIENTS_JSON" | jq -r ".[$i].pdv_id_key")
+      [ -n "$id_key" ] && [ "$id_key" != "null" ] && \
+        cid=$(jq -r --arg k "$id_key" '.variables[$k] // empty' "$PDV" 2>/dev/null)
+    fi
+
+    if [ "$DRY_RUN" = true ]; then
+      ok "$name" "$(dim '(dry-run) would POST /v1.0/Agents')"
+      agent_payload "$name" "${cid:-<client-id>}" | jq . | sed 's/^/      /'
+      continue
+    fi
+
+    if [ -z "$cid" ]; then
+      warn "$name" "$(dim 'no client_id known — cannot associate; skipping the registry record')"
+      continue
+    fi
+
+    # Idempotence: a duplicate displayName is a 409, so check first.
+    if existing=$(find_agent "$name") && [ -n "$existing" ]; then
+      warn "$name" "$(dim "agent record exists (id=$existing) — left unchanged; use --delete to replace")"
+      AGENTS_CREATED+=("$name"$'\t'"$existing")
+      continue
+    fi
+
+    body="$(agent_payload "$name" "$cid" ACTIVE)"
+    _split_resp "$(agents_api POST "/v1.0/Agents" "$body")"
+    case "$RESP_STATUS" in
+      200|201)
+        local aid stored
+        aid=$(printf '%s' "$RESP_BODY" | jq -r '.id // empty')
+        stored=$(printf '%s' "$RESP_BODY" | jq -r '.status // empty')
+        if [ -z "$aid" ]; then
+          fail "$name" 'created but the response carried no agent id'
+          continue
+        fi
+        # Behavior 1: the POST stores UNDER_REVIEW whatever we asked for, so
+        # promote with a PUT. A full replace, hence the whole record.
+        if [ "$stored" = "ACTIVE" ]; then
+          ok "$name" "$(dim "agent record created (id=$aid, status=ACTIVE)")"
+        else
+          local promo
+          _split_resp "$(agents_api PUT "/v1.0/Agents/$aid" "$(agent_payload "$name" "$cid" ACTIVE)")"
+          case "$RESP_STATUS" in
+            200|204)
+              promo=$(agents_api GET "/v1.0/Agents/$aid" | sed '$d' | jq -r '.status // empty')
+              if [ "$promo" = "ACTIVE" ]; then
+                ok "$name" "$(dim "agent record created (id=$aid) — ${stored:-?} promoted to ACTIVE")"
+              else
+                warn "$name" "$(dim "agent record created (id=$aid) but status is ${promo:-?}, not ACTIVE")"
+                echo "$(dim "      Fix with: ./verify/set-agent-status.sh ACTIVE")"
+              fi ;;
+            403)
+              warn "$name" "$(dim "agent record created (id=$aid, status=${stored:-?}) — no entitlement to promote it")"
+              echo "$(dim '      The admin client needs manageAgentStatus (or tenantAdmin) to set status.')"
+              echo "$(dim '      Until it is ACTIVE the gateway denies the agent (auth.agent_suspended).')" ;;
+            *)
+              warn "$name" "$(dim "agent record created (id=$aid, status=${stored:-?}) — promotion returned HTTP $RESP_STATUS")"
+              echo "$(dim '      Fix with: ./verify/set-agent-status.sh ACTIVE')" ;;
+          esac
+        fi
+        # Behavior 3: do NOT read oauthClients back to confirm association —
+        # it is write-only and always returns null.
+        AGENTS_CREATED+=("$name"$'\t'"$aid")
+        ;;
+      403|404)
+        warn "$name" "$(dim "Agent Registry unavailable (HTTP $RESP_STATUS) — skipping")"
+        echo "$(dim '      Agent identity is an Early Access capability. The OAuth client was')"
+        echo "$(dim '      still created; scenario 14 will skip until the registry is enabled.')"
+        ;;
+      *)
+        fail "$name" "HTTP $RESP_STATUS"
+        printf '%s\n' "$RESP_BODY" | jq . 2>/dev/null | sed 's/^/      /' \
+          || printf '      %s\n' "$RESP_BODY"
+        case "$RESP_BODY" in
+          *CSINH2100E*) echo "$(dim '      A required field is missing — oauthClients[0].issuer is the usual one.')" ;;
+          *CSINH2002E*) echo "$(dim '      Duplicate displayName or externalId.')" ;;
+        esac
+        ;;
+    esac
+  done
+}
+
+delete_agents() {
+  local i name role found any=false
+  for i in $(seq 0 $((CLIENT_COUNT - 1))); do
+    role=$(printf '%s' "$CLIENTS_JSON" | jq -r ".[$i].role")
+    [ "$role" = "agent" ] || continue
+    name=$(printf '%s' "$CLIENTS_JSON" | jq -r ".[$i].name")
+
+    if [ "$any" = false ]; then
+      echo
+      echo "$(yellow 'Deleting') $(dim "agent records from ${TENANT_URL}/v1.0/Agents")"
+      any=true
+    fi
+
+    if [ "$DRY_RUN" = true ]; then
+      ok "$name" "$(dim '(dry-run) would DELETE /v1.0/Agents/<id>')"
+      continue
+    fi
+
+    if ! found=$(find_agent "$name") || [ -z "$found" ]; then
+      warn "$name" "$(dim 'no agent record — nothing to delete')"
+      continue
+    fi
+    _split_resp "$(agents_api DELETE "/v1.0/Agents/$found")"
+    case "$RESP_STATUS" in
+      200|204) ok   "$name" "$(dim "agent record deleted (id=$found)")" ;;
+      404)     warn "$name" "$(dim 'already gone')" ;;
+      *)       fail "$name" "HTTP $RESP_STATUS" ;;
+    esac
+  done
+}
+
 write_back() {
-  [ "${#CREATED[@]}" -gt 0 ] || return 0
+  # Either half can have something to write: the clients created this run, or
+  # an agent record created against a client that already existed.
+  [ "${#CREATED[@]}" -gt 0 ] || [ "${#AGENTS_CREATED[@]}" -gt 0 ] || return 0
 
   echo
   echo "$(dim 'Credentials') $(dim "-> $(basename "$PDV")")"
@@ -1390,7 +1840,9 @@ write_back() {
   local tmp; tmp="$(mktemp)"
   cp "$PDV" "$tmp"
 
-  for entry in "${CREATED[@]}"; do
+  # Guarded: under `set -u` an empty array expansion aborts the function, which
+  # would skip the agent write-back below on a run that created no clients.
+  for entry in ${CREATED[@]+"${CREATED[@]}"}; do
     name="$(printf '%s' "$entry" | cut -f1)"
     cid="$(printf '%s' "$entry" | cut -f2)"
     secret="$(printf '%s' "$entry" | cut -f3)"
@@ -1418,13 +1870,110 @@ write_back() {
     updated=$((updated + 1))
   done
 
+  # The Agent Registry id. Not a credential — it is the governance handle the
+  # gateway's agent-status plugin and verify/set-agent-status.sh both read, so
+  # it belongs next to the client ids rather than in .env.verify.
+  local aentry aname aid
+  for aentry in ${AGENTS_CREATED[@]+"${AGENTS_CREATED[@]}"}; do
+    aname="$(printf '%s' "$aentry" | cut -f1)"
+    aid="$(printf '%s' "$aentry" | cut -f2)"
+    [ -n "$aid" ] || continue
+    jq --arg v "$aid" '.variables.VERIFY_AGENT_ID = $v' "$tmp" > "$tmp.new" \
+      && mv "$tmp.new" "$tmp"
+    ok "$aname" "$(dim 'VERIFY_AGENT_ID')"
+    updated=$((updated + 1))
+  done
+
   if [ "$updated" -gt 0 ]; then
     # Only now overwrite the real file, so a failure part-way leaves it intact.
     mv "$tmp" "$PDV"
   else
     rm -f "$tmp"
   fi
+
+  write_back_reader
 }
+
+# The reader client's id and SECRET.
+#
+# Deliberately not post_deploy_variables.json: that file holds generated ids and
+# is handed around, whereas this is a live credential the gateway process reads
+# at runtime. .env.verify is where this demo already keeps those, and restart.sh
+# sources it into the gateway's environment.
+#
+# Appended rather than rewritten, and only when absent, so a hand-managed
+# .env.verify is never clobbered.
+write_back_reader() {
+  [ -n "$READER_CREATED" ] || [ -n "$OPERATOR_CREATED" ] || return 0
+  local envf="$DEMO_DIR/.env.verify"
+
+  if [ ! -f "$envf" ]; then
+    warn ".env.verify" "$(dim 'not present — store these yourself')"
+    [ -n "$READER_CREATED" ] && \
+      echo "$(dim "      VERIFY_AGENT_READER_CLIENT_ID=$(printf '%s' "$READER_CREATED" | cut -f1)")"
+    [ -n "$OPERATOR_CREATED" ] && \
+      echo "$(dim "      VERIFY_AGENT_OPERATOR_CLIENT_ID=$(printf '%s' "$OPERATOR_CREATED" | cut -f1)")"
+    echo "$(dim '      (secrets are shown in the Verify console under Security -> API access)')"
+    return 0
+  fi
+
+  _append_pair() {
+    local var_prefix="$1" pair="$2" label="$3" ent="$4" who="$5"
+    [ -n "$pair" ] || return 0
+    local cid secret
+    cid="$(printf '%s' "$pair" | cut -f1)"
+    secret="$(printf '%s' "$pair" | cut -f2)"
+    local existing_id
+    existing_id=$(sed -n "s/^${var_prefix}_CLIENT_ID=//p" "$envf" | tail -1)
+    if [ -n "$existing_id" ]; then
+      if [ "$existing_id" = "$cid" ]; then
+        ok "$(basename "$envf")" "$(dim "${label} client already current")"
+        return 0
+      fi
+      # The ids disagree. This is what a clean-slate re-provision produces: new
+      # tenant clients, stale values here — and the stale ones will fail to
+      # authenticate, which surfaces much later as a confusing gateway error.
+      # Rewrite in place rather than appending a duplicate: a second
+      # assignment of the same variable would silently win or lose depending on
+      # sourcing order.
+      local tmpf
+      tmpf="$(mktemp)"
+      sed -e "s|^${var_prefix}_CLIENT_ID=.*|${var_prefix}_CLIENT_ID=${cid}|" \
+          -e "s|^${var_prefix}_CLIENT_SECRET=.*|${var_prefix}_CLIENT_SECRET=${secret}|" \
+          "$envf" > "$tmpf" && mv "$tmpf" "$envf"
+      warn "$(basename "$envf")" "$(dim "${label} client id changed — updated in place")"
+      echo "$(dim "      was $existing_id")"
+      echo "$(dim "      now $cid")"
+      return 0
+    fi
+    {
+      printf '\n'
+      printf '# ---------------------------------------------------------------------------\n'
+      printf '# Agent-status %s (scenario 14) — written by verify/import-verify-clients.sh\n' "$label"
+      printf '# ---------------------------------------------------------------------------\n'
+      printf '# Holds exactly one entitlement: %s\n' "$ent"
+      printf '# Used by: %s\n' "$who"
+      printf '%s_CLIENT_ID=%s\n' "$var_prefix" "$cid"
+      printf '%s_CLIENT_SECRET=%s\n' "$var_prefix" "$secret"
+    } >> "$envf"
+    ok "$(basename "$envf")" "$(dim "${var_prefix}_CLIENT_ID + _SECRET appended")"
+  }
+
+  # Two credentials, deliberately separate. Neither can do the other's job:
+  # the reader cannot change status (403), the operator cannot read anything
+  # else (403). So a compromised gateway cannot undo a suspension.
+  _append_pair VERIFY_AGENT_READER "$READER_CREATED" \
+    "reader" "readAgents" \
+    "the GATEWAY, on the request path (agent-status plugin)"
+  _append_pair VERIFY_AGENT_OPERATOR "$OPERATOR_CREATED" \
+    "operator" "manageAgentStatus" \
+    "verify/set-agent-status.sh and a human admin flipping status"
+
+  if [ -n "$OPERATOR_CREATED" ] || [ -n "$READER_CREATED" ]; then
+    echo "$(dim '      The admin pair stays PROVISIONING-ONLY: nothing on the demo path reads it.')"
+  fi
+}
+
 
 # ==========================================================================
 # main
@@ -1456,6 +2005,10 @@ if [ "$DISCOVER_ONLY" = true ]; then
 fi
 
 if [ "$DO_DELETE" = true ]; then
+  # Agent records first: they reference the OAuth clients, and a dangling
+  # reference is harder to reason about than an orphaned record.
+  delete_agents
+  delete_status_clients
   delete_clients
   # After the clients: the purpose is only deletable once nothing references it.
   if [ "$DO_PURPOSE" = true ]; then
@@ -1468,6 +2021,10 @@ else
     create_purpose
   fi
   create_clients
+  # After the clients: the registry record associates a client that must exist.
+  create_agents
+  # The gateway's own least-privilege credential for reading that record.
+  create_status_clients
   if [ "$WRITE_BACK" = true ]; then
     write_back
   fi

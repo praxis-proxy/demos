@@ -37,6 +37,17 @@ praxis-proxy-protocol = { version = "0.7", features = ["admin-api"] }
 praxis-policy-plugin-pii-scanner = { path = ".policy/reference/plugins/pii-scanner" }
 praxis-policy-plugin-audit-logger = { path = ".policy/reference/plugins/audit-logger" }
 
+# This demo's own plugin, written against the same extension contract as the two
+# reference plugins above. It lives in `plugins/` rather than under `.policy/`
+# because `.policy` is a vendored checkout of the engine AND its own git repo —
+# a crate added there would be an untracked addition to someone else's tree.
+#
+# It reads `praxis-policy-core` by path for the same reason the reference
+# plugins do: the `[patch]` below keeps that the single copy in the graph, and a
+# registry copy here would mean two `PluginFactory` traits and a main.rs that
+# no longer typechecks.
+praxis-policy-plugin-agent-status = { path = "plugins/agent-status" }
+
 clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 

@@ -161,6 +161,107 @@ plugins:
           leeway_seconds: 60
       claim_mapper: ibmverify
 
+  # Scenario 14: the AGENT's own identity. A governed IBM Verify Agent Identity
+  # mints with client_credentials and acts as itself — no human, no user token.
+  #
+  # role: subject, not a bespoke "agent" role. There is no agent identity slot
+  # in the engine (the slots are subject / client / caller_workload /
+  # this_workload), and on this route the agent IS the subject: there is nobody
+  # else. `read_agent`/AgentExtension is NOT an identity — it carries session
+  # and conversation state.
+  #
+  # The token is a true JWT because the agent's client is an application-level
+  # OIDC client with accessTokenType: jwt. A Dynamic Client Registration client
+  # mints an opaque token this resolver could not validate — see delta A1 in
+  # docs/brainstorms/2026-10-20-verify-agent-identity-requirements.md.
+  #
+  # It carries NO roles/teams/permissions: attribute mappers read user
+  # attributes and a client_credentials grant has no user (finding E3). Its
+  # authority is the `scope` it requests, which the agent route gates on.
+  - name: jwt-agent
+    capabilities:
+      - perform_http
+    kind: identity/jwt
+    hooks: [identity.resolve]
+    mode: sequential
+    on_error: fail
+    config:
+      # `user` is the role name the engine accepts (user | client | workload);
+      # it writes security.subject, which is the slot the agent-status plugin
+      # reads. There is no "agent" or "subject" role — the engine rejects
+      # anything else as role: Custom(...), which is not supported.
+      #
+      # The agent IS the subject on this route: there is no human. Naming it
+      # `user` is a vocabulary artifact of the engine, not a claim that a person
+      # is involved.
+      role: user
+      header: X-Agent-Token
+      trusted_issuers:
+        - issuer: "${VERIFY_TENANT_URL}/oauth2"
+          # The agent's client lists praxis-gateway in its audiences so the
+          # gateway can validate the token it is handed.
+          audiences: ["praxis-gateway"]
+          algorithms: ["RS256"]
+          decoding_key:
+            kind: jwks_url
+            url: "${VERIFY_TENANT_URL}/oauth2/jwks"
+          leeway_seconds: 60
+      # `standard`, not `ibmverify`: the preset exists to wrap scalar
+      # roles/teams/permissions into sets, and this token carries none of them.
+      # Nothing to normalise, so nothing to gain.
+      claim_mapper: standard
+
+  # Scenario 14: refuses the call when the agent is not ACTIVE in the IBM Verify
+  # Agent Registry.
+  #
+  # This is the demo's kill switch, and the half SPIFFE does not have: an admin
+  # suspends a named agent in a console and the next call fails.
+  #
+  # It has to live here rather than at the IdP because Verify does NOT enforce
+  # status at the token endpoint — a SUSPENDED agent still mints tokens, and
+  # tokens minted before the suspend stay valid (finding E1, measured). That is
+  # also IBM's own architecture: the vault cookbook's Use Case C has the token
+  # exchange succeed while the RESOURCE denies. Praxis is the resource here.
+  #
+  # cache_ttl_seconds IS the revocation window: a suspended agent keeps working
+  # until its entry expires. Stated rather than hidden, because it is the fair
+  # comparison against an SVID's TTL.
+  - name: agent-status
+    kind: validator/agent-status
+    hooks: [cmf.tool_pre_invoke]
+    mode: sequential
+    on_error: fail
+    capabilities:
+      - perform_http      # the registry GET and the admin token mint
+      - read_subject      # unlocks security.subject
+      - read_claims       # ... and its claims, where an agent id may appear
+    config:
+      registry_url: "${VERIFY_TENANT_URL}/v1.0/Agents"
+      # Which agent record to check. A Verify client_credentials token carries
+      # sub/client_id (the OAuth client) but no claim naming its Agent Registry
+      # record, and the association is write-only registry-side, so it cannot
+      # be resolved by lookup either. verify/import-verify-clients.sh writes
+      # this id into post_deploy_variables.json.
+      agent_id: "${VERIFY_AGENT_ID}"
+      # A dedicated API client holding exactly ONE entitlement, readAgents.
+      # NOT the admin client: that one carries ~40 entitlements including
+      # writeAgents and agentOwner, so a gateway compromise could rewrite the
+      # records that govern it — including silently re-enabling a suspended
+      # agent. With readAgents alone the gateway can read an agent record and
+      # nothing else (PUT /v1.0/Agents, POST /v2.0/Users and
+      # GET /v1.0/applications are all 403; verified on praxis-2).
+      #
+      # verify/import-verify-clients.sh creates it and appends its credentials
+      # to .env.verify. The admin pair stays provisioning-only.
+      admin_client_id: "${VERIFY_AGENT_READER_CLIENT_ID}"
+      # A NAME, not the secret: this file is generated onto disk, and a live
+      # tenant credential must not land in it. restart.sh sources .env.verify.
+      admin_client_secret_env: VERIFY_AGENT_READER_CLIENT_SECRET
+      cache_ttl_seconds: 5
+      # An unreachable registry denies. A kill switch that fails open is not a
+      # kill switch; the cost is that the agent route needs the tenant up.
+      on_unavailable: deny
+
   # RFC 8693 token-exchange delegator. Trades the user's hr-copilot
   # token for a workday-api-audience-scoped access token.
   #
@@ -611,6 +712,62 @@ routes:
                 visibility: ${args.visibility}
         - "delegate(github-oauth, target: github-api, audience: github-api, permissions: [repo:read:internal])"
         - "!(delegation.granted.permissions contains 'repo:read:internal'): deny"
+        - "run(audit-log)"
+  # Scenario 14: the agent calls search_repos on its OWN authority.
+  #
+  # replace_inherited drops the global jwt-user / jwt-client resolvers, so this
+  # route authenticates by the agent's token alone — no X-User-Token, no
+  # Authorization. Scenario 13's get_headcount route does the same thing for a
+  # SPIFFE SVID; this is the Verify Agent Identity counterpart.
+  #
+  # run(agent-status) is FIRST so a suspended agent is refused before anything
+  # else runs. It is an authorization effect rather than an authentication step
+  # because a deny raised during authentication becomes HTTP 401 with a plain
+  # text body, while the scenario harness asserts the violation in both the
+  # X-Policy-Violation header and the JSON-RPC error body — only an
+  # authorization-phase deny produces that envelope. Measured both ways.
+  #
+  # There is deliberately NO team gate here. The agent holds no teams claim
+  # (a client_credentials token cannot carry one — finding E3) and should not
+  # borrow a human's. Its authority is the route itself plus its ACTIVE status:
+  # this tool exists for the agent, and agent-status decides whether the agent
+  # may act at all.
+  #
+  # Gating on the token's `scope` was the original intent and is not currently
+  # expressible: APL's attribute namespaces are role. / perm. / team. / claim. /
+  # args. / client. / caller_workload. / delegation. (ppe-apl-cmf
+  # constants.rs:85-139) — there is no scope. namespace, and `scope` does not
+  # reach claim.* either. The agent still REQUESTS
+  # scope=repo:read:internal, which bounds what the exchanged credential can
+  # carry; the gateway just cannot assert on it yet.
+  - tool: search_repos_agent
+    authentication:
+      replace_inherited: true
+      steps:
+        - jwt-agent
+    # The global assertions describe a person (x-auth-user-id from subject.id),
+    # which would here name the agent's client id. Replaced, and the strip list
+    # restated: without the inherited entries nothing removes a caller's own
+    # x-auth-* or a stray user token before hr-mcp sees them.
+    assertions:
+      request:
+        replace_inherited: true
+        strip:
+          - x-user-token
+          - x-auth-*
+    authorization:
+      pre_invocation:
+        # First, so a suspended agent is refused before anything else runs.
+        - "run(agent-status)"
+        # `subject: user` names the inbound credential to exchange, keyed by the
+        # TokenRole that jwt-agent registered (role: user). The engine's subject
+        # vocabulary is user | client | caller_workload | this_workload — there
+        # is no `agent`, and on this route the agent IS the inbound subject.
+        #
+        # The agent holds no standing GitHub entitlement: this obtains one for
+        # the call, audience-scoped to github-api.
+        - "delegate(github-oauth, target: github-api, audience: github-api, permissions: [repo:read:internal], subject: user)"
+        - "!delegation.granted: deny"
         - "run(audit-log)"
 
   # ----------------------------------------------------------------

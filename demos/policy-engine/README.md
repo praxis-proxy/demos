@@ -248,6 +248,7 @@ rather than one the caller sent.
 | 11 | Bob adjusts compensation by > $10k | Human-in-the-loop: the gateway suspends with `-32120`, Alice approves out-of-band (CIBA), then it applies |
 | 12 | Bob calls `get_compensation`, then again spoofing an asserted header | `assertions:` renders identity into upstream headers, strips his raw token, and refuses to forward a header he set himself |
 | 13 | The agent calls `get_headcount` with only its SPIFFE JWT-SVID | Workload identity: the agent gets its SVID by attestation, the route authenticates by the SVID alone, and two-leg delegation obtains a `workday-api` token. No person involved. An unregistered process gets no SVID. Needs `WITH_SPIRE=1`; skipped otherwise |
+| 14 | A governed IBM Verify **agent identity** calls `search_repos_agent` as itself, then an admin **suspends** it | Agent governance: the agent is a record in the Agent Registry with an owner, tags and a lifecycle status. It authenticates with `client_credentials` — no human, no user token — and the gateway refuses it the moment its status is not `ACTIVE`. Verify *records* the status but does not enforce it at the token endpoint (a suspended agent still mints tokens), so policy is the kill switch. Needs `USE_VERIFY=true` and a provisioned agent; skipped otherwise |
 
 Scenarios 10 and 11 exercise the human-in-the-loop flow described in
 [Human-in-the-loop: manager approval](#human-in-the-loop-manager-approval)
@@ -639,6 +640,80 @@ What this attests is narrow: the process runs as uid 1001, on a node that joined
 
 - `spire/verify-svid-flow.sh` runs the whole chain in three calls (fetch the agent's SVID, use it as a client assertion for the base token, exchange that for a `workday-api` token) and prints the decoded claims at each step. It is the quickest way to confirm the Keycloak setup before running scenario 13.
 - `spire/verify-dual-principal.sh` probes whether Keycloak accepts an agent credential as the RFC 8693 `actor_token` alongside a user's token, the "user, with the agent named as actor" case, and reports which form of actor token works.
+
+## Agent governance: the agent is approved, not just identified
+
+Scenario 13 answers *"is this really the agent?"* — SPIRE attests the process
+and issues an SVID, and a process that fails attestation gets nothing. What it
+cannot answer is *"should this agent be running at all, today?"* There is no
+registry of agents, no owner, no status, and no way for a human to revoke one
+without editing registration entries or waiting out a TTL.
+
+Scenario 14 is that missing half. The agent is an **IBM Verify Agent
+Identity**: a record in the Agent Registry with a display name, an owner, tags,
+and a lifecycle status (`ACTIVE` / `SUSPENDED` / `UNDER_REVIEW` / `DEFAULT`). It
+authenticates as itself with `client_credentials` — no human, no user token, no
+`Authorization` header — and calls a tool on its own authority. Then an admin
+suspends it in the console, and the next call fails.
+
+```bash
+USE_VERIFY=true GATEWAY_CONFIG=praxis-verify-opa.yaml ./restart.sh
+./verify/import-verify-clients.sh                 # creates the agent + its registry record
+USE_VERIFY=true ./scenarios/14-verify-agent-identity.sh
+
+./verify/set-agent-status.sh SUSPENDED            # flip it by hand, mid-demo
+./verify/set-agent-status.sh                      # report the current status
+./verify/set-agent-status.sh ACTIVE
+```
+
+**The gateway enforces the status; Verify records it.** This is worth stating
+plainly because it is the one counter-intuitive part: IBM Verify does *not* gate
+token issuance on agent status. A `SUSPENDED` agent still mints tokens, and
+tokens minted before the suspend stay valid — verified against a live tenant.
+So the kill switch cannot live at the IdP.
+
+That is also IBM's own architecture rather than a workaround. The
+Agent-Identity-with-Vault cookbook has the token exchange succeed while the
+*resource* denies for a missing or invalid agent registration. Praxis is the
+resource in this demo, so `run(agent-status)` is where the refusal happens:
+the gateway reads `/v1.0/Agents/{id}` and denies with `auth.agent_suspended`
+unless the status is `ACTIVE`.
+
+**Reading the status and changing it are two different credentials.** Both are
+created by `import-verify-clients.sh`, each holding exactly one entitlement:
+
+| Client | Entitlement | Held by |
+|---|---|---|
+| reader | `readAgents` | the gateway, per request |
+| operator | `manageAgentStatus` | `set-agent-status.sh` / a human admin |
+
+The gateway can read an agent record and nothing else — `PUT /v1.0/Agents` is
+403 for it. That is the point: the gateway is the component most exposed to
+agent traffic, and if it could also change status, a compromised gateway could
+re-enable the agent its own policy had just suspended. The kill switch would be
+its own bypass.
+
+`manageAgentStatus` is narrow in the other direction — it permits a status
+change and nothing else, not even renaming the agent (403 `CSINH2507E`). The
+tenant-admin credentials are **provisioning-only**; nothing on the demo path
+reads them.
+
+**The revocation window is real and is a configured number.** The plugin caches
+the status, and `cache_ttl_seconds` is how long a suspended agent keeps working.
+Scenario 14 waits it out rather than hiding it. SPIFFE has the same shape of
+problem with SVID TTL; neither mechanism is instant, and both windows are
+something an operator chooses.
+
+**Neither scenario ports to the other IdP.** Keycloak's SPIFFE-native client
+authentication (`providerId: spiffe`, `client_assertion_type: …jwt-spiffe`) has
+no IBM Verify counterpart, and Verify's Agent Registry has no Keycloak
+counterpart. 13 is Keycloak-only, 14 is Verify-only, and each reports itself
+skipped on the other path. They make different points about agent identity and
+the demo keeps both.
+
+One convergence worth knowing about but not built here: Verify's Agent Registry
+accepts `authMethods` of type `svid-jwt` and `svid-x509`, so it can *govern* a
+SPIFFE identity rather than compete with one. See the brainstorm's finding E9.
 
 ## Notes
 

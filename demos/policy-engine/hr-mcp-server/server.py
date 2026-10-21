@@ -24,7 +24,7 @@ than printing a claim next to a log line and trusting a human to read it.
 
 Tools:
     get_compensation, send_email, display_compensation, get_directory,
-    search_repos, adjust_compensation, get_headcount
+    search_repos, search_repos_agent, adjust_compensation, get_headcount
 """
 
 import base64
@@ -310,6 +310,13 @@ TOOLS = {
     "get_directory": tool_get_directory,
     "get_headcount": tool_get_headcount,
     "search_repos": tool_search_repos,
+    # Scenario 14's agent route. Same handler as search_repos: the upstream
+    # behavior is identical, and the separate name exists so the gateway can
+    # give the AGENT principal its own route (own resolver, own status check,
+    # no team gate) without changing the human path through search_repos.
+    # Routes are keyed by tool name and a name may appear on only one route,
+    # which is why this is a second entry rather than a shared one.
+    "search_repos_agent": tool_search_repos,
     "adjust_compensation": tool_adjust_compensation,
 }
 

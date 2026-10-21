@@ -2647,6 +2647,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "praxis-ai-proxy",
+ "praxis-policy-plugin-agent-status",
  "praxis-policy-plugin-audit-logger",
  "praxis-policy-plugin-pii-scanner",
  "praxis-proxy-filter",
@@ -2920,6 +2921,17 @@ version = "0.4.0"
 dependencies = [
  "futures",
  "tokio",
+]
+
+[[package]]
+name = "praxis-policy-plugin-agent-status"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "praxis-policy-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

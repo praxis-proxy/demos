@@ -57,7 +57,7 @@
 # scalar into a one-element vec before the structured fields are read, so an
 # unpadded single-valued attribute now maps correctly. The policy selects it with
 #   claim_mapper: ibmverify
-# on the jwt-user and jwt-agent plugins (policy-verify-opa.yaml.tmpl).
+# on the jwt-user and jwt-client plugins (policy-verify-opa.yaml.tmpl).
 #
 # So the values sent below are unpadded, and the CELx mappers in
 # import-verify-clients.sh no longer append `+ ['']` either. Both sides have to

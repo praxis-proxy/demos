@@ -9,7 +9,7 @@
 ##
 ##   name             -> name  (the application's display name in the console)
 ##   role             -> which demo job this client does; drives the defaults
-##                       below. One of: mint | exchange | audience
+##                       below. One of: mint | exchange | audience | agent
 ##   ropc             -> providers.oidc.properties.grantTypes.ropc
 ##   client_creds     -> providers.oidc.properties.grantTypes.clientCredentials
 ##   token_exchange   -> providers.oidc.properties.grantTypes.tokenExchange
@@ -78,8 +78,42 @@
 ##
 ## If you want the console to show only what actually participates in the
 ## Verify path, delete these two rows; the demo behaves identically.
+##
+## ---------------------------------------------------------------------------
+## role=agent — the non-human principal (scenario 14)
+## ---------------------------------------------------------------------------
+## An IBM Verify Agent Identity: a governed principal that acts as ITSELF, with
+## no human in the loop. It mints with client_credentials and calls search_repos
+## on its own authority.
+##
+## Three things make it unlike the rows above:
+##
+##   - It carries NO claims. A client_credentials token cannot carry custom
+##     claims on this tenant — attribute mappers read user attributes, and a
+##     client-credentials grant has no user. Verified four ways against
+##     praxis-2; see docs/brainstorms/2026-10-20-verify-agent-identity-requirements.md
+##     (finding E3). The agent's authority is its SCOPE, which does pass through.
+##   - Its OWN client needs no application entitlement: nothing authenticates
+##     TO the agent's client. But it does force a change on the EXCHANGE
+##     client. Application entitlement is checked against the exchange
+##     SUBJECT, and on the agent route the agent IS the subject — an OAuth
+##     client with no SCIM id, so the per-persona grants this demo normally
+##     uses cannot cover it. The importer therefore entitles the exchange
+##     client by BIRTHRIGHT whenever an agent row is present. Without that,
+##     scenario 14 fails at delegate with CSIAQ0279E while 01-13 pass, because
+##     their subjects are real users. (This corrects an earlier note here that
+##     claimed entitlement only ever gates users.)
+##   - It has a second half that is not an OAuth client at all: an Agent
+##     Registry record (POST /v1.0/Agents) that holds the governance state —
+##     owner, tags, and the ACTIVE/SUSPENDED/UNDER_REVIEW status an admin can
+##     flip in the console. The importer creates it and associates this client
+##     with it. The registry id is written back as VERIFY_AGENT_ID.
+##
+## `praxis-gateway` is in its audiences so the gateway can validate the agent's
+## token, and `github-api` so the exchange can narrow to that audience.
 name,role,ropc,client_creds,token_exchange,audiences,claims,pdv_id_key,pdv_secret_key
 hr-copilot,mint,true,true,false,praxis-gateway|workday-api|github-api,roles|permissions|teams|gh_permissions|manager,HR_COPILOT_CLIENT_ID,HR_COPILOT_CLIENT_SECRET
 praxis-gateway,exchange,false,true,true,workday-api|github-api,roles|permissions|teams|gh_permissions|manager,GATEWAY_CLIENT_ID,GATEWAY_CLIENT_SECRET
 workday-api,audience,false,true,false,,,,
 github-api,audience,false,true,false,,,,
+hr-copilot-agent,agent,false,true,false,praxis-gateway|github-api,,AGENT_CLIENT_ID,AGENT_CLIENT_SECRET

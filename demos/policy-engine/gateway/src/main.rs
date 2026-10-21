@@ -43,6 +43,14 @@ fn register_host_plugins() {
         praxis_policy_plugin_audit_logger::KIND,
         std::sync::Arc::new(|| Box::new(praxis_policy_plugin_audit_logger::AuditLoggerFactory)),
     );
+    // This demo's own plugin, not a reference implementation: it denies a call
+    // whose agent is not ACTIVE in the IBM Verify Agent Registry. Registered
+    // the same way, which is the point — the engine needs no change to gain an
+    // enforcement point it does not ship.
+    praxis_filter::register_policy_plugin_factory(
+        praxis_policy_plugin_agent_status::KIND,
+        std::sync::Arc::new(|| Box::new(praxis_policy_plugin_agent_status::AgentStatusFactory)),
+    );
 }
 
 fn main() {

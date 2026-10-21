@@ -134,12 +134,20 @@ if [ "$PRINT" = true ] && [ "${#VARIANTS[@]}" -ne 1 ]; then
   die "--print needs exactly one variant (one of: ${ALL_VARIANTS[*]})"
 fi
 
-# --- resolve the two values ------------------------------------------------
+# --- resolve the values ----------------------------------------------------
 # An already-exported value wins, so a one-off run or CI can override without
 # editing any file. Otherwise fall back to post_deploy_variables.json, which is
 # what verify/import-verify-clients.sh writes the generated ids into.
 TENANT_URL="${VERIFY_TENANT_URL:-}"
 CLIENT_ID="${VERIFY_GATEWAY_CLIENT_ID:-}"
+# Scenario 14's agent principal. Optional: the Verify templates reference these
+# only in the agent route, and a tenant without Agent Identity (Early Access)
+# has neither. Empty renders a config whose agent route cannot authorize, which
+# is what makes scenario 14 skip rather than fail — see its exit-77 guard.
+AGENT_ID="${VERIFY_AGENT_ID:-}"
+# The gateway's runtime credential for reading agent status: a readAgents-only
+# API client, NOT the admin pair. See the note in the Verify templates.
+READER_CLIENT_ID="${VERIFY_AGENT_READER_CLIENT_ID:-}"
 
 if [ -z "$TENANT_URL" ] || [ -z "$CLIENT_ID" ]; then
   [ -f "$PDV" ] || die "$PDV not found, and VERIFY_TENANT_URL / VERIFY_GATEWAY_CLIENT_ID are not both set"
@@ -156,6 +164,21 @@ if [ -z "$TENANT_URL" ] || [ -z "$CLIENT_ID" ]; then
     CLIENT_ID=$(jq -r '.variables.GATEWAY_CLIENT_ID // empty' "$PDV")
     [ -n "$CLIENT_ID" ] || die "GATEWAY_CLIENT_ID missing from $PDV; export VERIFY_GATEWAY_CLIENT_ID instead"
   fi
+fi
+
+# Both agent values are best-effort: absent is a valid state (no Agent Identity
+# on this tenant), so they warn rather than die.
+if [ -z "$AGENT_ID" ] && [ -f "$PDV" ] && command -v jq >/dev/null 2>&1; then
+  AGENT_ID=$(jq -r '.variables.VERIFY_AGENT_ID // empty' "$PDV")
+fi
+if [ -z "$READER_CLIENT_ID" ]; then
+  # Lives in .env.verify, not the PDV file: it is paired with a secret, and
+  # that is where this demo keeps live tenant credentials.
+  [ -f ./.env.verify ] && READER_CLIENT_ID=$(
+    # shellcheck disable=SC1091
+    . ./.env.verify >/dev/null 2>&1 || true
+    printf '%s' "${VERIFY_AGENT_READER_CLIENT_ID:-}"
+  )
 fi
 
 # A trailing slash would produce a double slash in the issuer, and an issuer
@@ -178,16 +201,20 @@ esac
 # Praxis's own ${args.*} interpolations are lower-case and dotted, and are
 # deliberately left alone — see the namespace note in the header.
 render() {
-  python3 -I - "$1" "$TENANT_URL" "$CLIENT_ID" <<'PY'
+  python3 -I - "$1" "$TENANT_URL" "$CLIENT_ID" "$AGENT_ID" "$READER_CLIENT_ID" <<'PY'
 import re, sys
 
 tmpl_path, tenant_url, client_id = sys.argv[1], sys.argv[2], sys.argv[3]
+agent_id, reader_client_id = sys.argv[4], sys.argv[5]
 with open(tmpl_path) as fh:
     text = fh.read()
 
 mapping = {
     "VERIFY_TENANT_URL": tenant_url,
     "VERIFY_GATEWAY_CLIENT_ID": client_id,
+    # Scenario 14. Empty is allowed: see the note where these are resolved.
+    "VERIFY_AGENT_ID": agent_id,
+    "VERIFY_AGENT_READER_CLIENT_ID": reader_client_id,
 }
 
 # This script owns the ${UPPER_SNAKE} namespace; Praxis owns everything else

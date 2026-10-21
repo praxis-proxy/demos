@@ -136,7 +136,10 @@ and `X-Policy-*` output.
 
 The preset wraps a scalar into a one-element vec on the engine side, so nothing
 has to force array shape any more. It is selected by `claim_mapper: ibmverify` on
-the `jwt-user` and `jwt-agent` plugins in `policy-verify-opa.yaml.tmpl`.
+the `jwt-user` and `jwt-client` plugins in `policy-verify-opa.yaml.tmpl`.
+(There is now also a `jwt-agent` resolver for scenario 14, but it uses
+`claim_mapper: standard`: an agent token carries no roles/teams/permissions
+for the preset to normalise.)
 
 Claims are now unpadded end to end:
 
@@ -269,3 +272,118 @@ tenant. They are the reason this script exists rather than a `curl` snippet.
 | Credentials | Not in the `201` response | It returns only `_links.self.href`; `GET` that to read the generated `clientId` / `clientSecret`. |
 | Admin entitlement | `manageAppAccessAdmin` | "Manage application lifecycle". Not `manageApplications`. |
 | Sign-on access | `POST /v1.0/owner/applications/{id}/entitlements` | Separate resource, not an application field. `birthRightAccess` for all users, or `additions[]` with a SCIM `subjectId` per user (`grantType: "BRT"`). Needs `manageAppAccessAdmin` or `manageAppAccessOwner`. |
+
+## Agent identity (scenario 14)
+
+`import-verify-clients.sh` provisions the agent from the `role=agent` row in
+`clients.csv`. That row produces **two** tenant objects, not one:
+
+1. an application-level OIDC client (`client_credentials`, JWT access token,
+   audiences `praxis-gateway` + `github-api`), and
+2. an **Agent Registry** record (`POST /v1.0/Agents`) with the client
+   associated to it, which is what carries the governance state.
+
+Ids are written back to `post_deploy_variables.json` as `AGENT_CLIENT_ID`,
+`AGENT_CLIENT_SECRET` and `VERIFY_AGENT_ID`.
+
+Three tenant behaviours the script works around, each verified against a live
+tenant and each silently damaging if you hand-roll this:
+
+- **Create always lands in `UNDER_REVIEW`.** `POST /v1.0/Agents` ignores the
+  `status` field — sending `"ACTIVE"` still stores `UNDER_REVIEW`. The importer
+  therefore POSTs and then promotes with a PUT, reporting
+  `UNDER_REVIEW promoted to ACTIVE`. Skip the promotion and the gateway denies
+  a freshly provisioned agent for a reason nobody chose.
+- **`oauthClients` is write-only.** It is required on write
+  (`CSINH2100E` without `issuer`) but always reads back as `null`, even
+  immediately after a 201 that accepted it. Do not verify the association by
+  reading it; check the write's status code.
+- **PUT is a full replace.** A PUT carrying only `status` clears
+  `description`, `tags` and the client association. `set-agent-status.sh`
+  reconstructs the whole record on every write for exactly this reason, and
+  re-supplies the association from config since it cannot be read back.
+
+### The two agent-status credentials
+
+Agent status is read on the request path and written by an operator, and those
+are deliberately **different credentials**. The importer creates both, each
+holding exactly one entitlement, and appends them to `.env.verify`:
+
+| Client | Entitlement | Used by |
+|---|---|---|
+| `praxis-agent-status-reader` | `readAgents` | the **gateway**, per request (agent-status plugin) |
+| `praxis-agent-status-operator` | `manageAgentStatus` | `set-agent-status.sh`, and a human admin |
+
+Neither can do the other's job. Verified against a live tenant:
+
+| | reader | operator |
+|---|---|---|
+| `GET /v1.0/Agents/{id}` | 200 | 200 |
+| `PUT` status change | **403** | 200 |
+| `PUT` renaming the agent | 403 | **403** (`CSINH2507E`) |
+| `POST /v2.0/Users` | 403 | 403 |
+| `GET /v1.0/applications` | 403 | 403 |
+| `POST /v1.0/apiclients` | 403 | 403 |
+
+**Why the split rather than one client with both entitlements.** The gateway is
+the component most exposed to agent traffic. If it could also change status, a
+compromised gateway could re-enable the agent its own policy had just
+suspended — the kill switch would be its own bypass. With `readAgents` alone it
+can observe the governance decision and enforce it, but not alter it.
+
+`manageAgentStatus` is itself narrow: per IBM's reference it permits "update
+status only; all other fields must match existing values", which the 403 on a
+rename confirms. So the operator credential cannot quietly re-point the agent
+at a different OAuth client either.
+
+The admin pair stays **provisioning-only** — nothing on the demo path reads it.
+The importer asserts each client's read-back entitlement list is exactly the
+one expected and warns if the tenant returned anything broader. If your admin
+client cannot create API clients (403 on `POST /v1.0/apiclients`), create the
+two by hand with those single entitlements and set the four variables yourself.
+
+### Flipping status by hand
+
+```bash
+./verify/set-agent-status.sh              # report
+./verify/set-agent-status.sh SUSPENDED    # revoke
+./verify/set-agent-status.sh ACTIVE       # restore
+```
+
+Statuses are `ACTIVE`, `SUSPENDED`, `UNDER_REVIEW`, `DEFAULT`. Only `ACTIVE`
+passes the gateway's check.
+
+Note that suspending does **not** stop the agent from getting a token — Verify
+records status without enforcing it at the token endpoint. The gateway is what
+refuses the call. See "Agent governance" in the top-level README.
+
+### The exchange client needs birthright entitlement
+
+Application entitlement is checked against the exchange **subject**. For
+scenarios 01-13 that subject is a persona (bob, alice, eve), and the importer
+grants access per user by SCIM id. The agent has no SCIM id — it is an OAuth
+client, not a directory user — so no per-user grant can cover it.
+
+So when a `role=agent` row is present, the importer entitles the **exchange**
+client (`praxis-gateway`) by birthright instead. Without it, scenario 14 fails
+at its delegate step with:
+
+```text
+CSIAQ0279E Only entitled users can single sign-on to the application.
+```
+
+while 01-13 pass, because their subjects are real users. That asymmetry is the
+tell.
+
+Scoped deliberately: only the exchange client, and only when an agent exists.
+The minting client keeps its explicit per-persona grants, which is what makes
+"only these four users can sign on" demonstrable. Re-running the importer
+repairs the entitlement on an existing client, so a tenant provisioned before
+the agent existed does not need `--delete`.
+
+### If the tenant has no Agent Registry
+
+It is an Early Access capability. When `/v1.0/Agents` answers 403 or 404 the
+importer warns, finishes the OAuth clients normally, and leaves
+`VERIFY_AGENT_ID` unset — which makes scenario 14 skip (exit 77) rather than
+fail.

@@ -27,6 +27,15 @@
 # Scenario 11 needs the CIBA approval loop; it is driven unattended here. On the
 # Verify path it is expected to fail: the CIBA plugin still points at Keycloak
 # and the tenant blocks the grant. Run it on the Keycloak path instead.
+#
+# Two scenarios are bound to one IdP by capability rather than config, in
+# opposite directions, and each skips (exit 77) on the other path:
+#
+#   13  Keycloak only — SPIFFE workload identity. Needs WITH_SPIRE=1.
+#   14  Verify only   — Agent Registry governance. Needs USE_VERIFY=true and
+#                       ./verify/import-verify-clients.sh to have run.
+#
+# See docs/idp-usage-by-scenario.md for why neither ports.
 set -uo pipefail
 
 cd "$(dirname "$0")"
