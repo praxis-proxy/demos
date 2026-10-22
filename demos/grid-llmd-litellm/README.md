@@ -25,32 +25,137 @@ kubectl, helm, kind, podman, and a grid checkout at the release being installed.
 
 ## Install
 
+`up.sh` runs the whole thing, and `GRID_REPO` points at a grid checkout at the
+release being installed:
+
 ```bash
 GRID_REPO=~/grid ./up.sh
+```
+
+What it runs, in order. Only what differs per cluster is set; chart defaults
+cover the rest.
+
+Two kind clusters on one podman network, MetalLB in each with a pool of its
+own, and a CoreDNS entry so both clusters resolve the hub's enrollment address.
+Those four are the only steps no chart can express.
+
+**The llm-d layer**, one chart per site. The sites differ by one key:
+
+```bash
+helm upgrade --install llmd-site ./charts/llmd-site -n grid --create-namespace \
+  --kube-context kind-grid-llmd-site-a --set site=site-a
+helm upgrade --install llmd-site ./charts/llmd-site -n grid --create-namespace \
+  --kube-context kind-grid-llmd-site-b --set site=site-b
+```
+
+**Enrollment**, on the hub only, in its own namespace because that namespace
+holds the Grid CA key:
+
+```bash
+helm upgrade --install grid-enrollment "$GRID_REPO/charts/grid-enrollment" \
+  --kube-context kind-grid-llmd-site-a -n grid-enrollment --create-namespace \
+  --set host=enroll.grid.demo \
+  --set invites.site-a.network=grid-llmd \
+  --set invites.site-b.network=grid-llmd \
+  --set enrollment.service.type=LoadBalancer \
+  --set enrollment.service.annotations."metallb\.io/loadBalancerIPs"=10.90.0.205
+```
+
+**Carrying the invite into the operator.** This is the hop the defaults hide.
+The enrollment chart mints one Secret per invite, `grid-invite-<site>`, in the
+hub's `grid-enrollment` namespace. The site operator looks for a Secret of that
+same name in its own namespace, carrying the site label, and refuses a token
+labelled for another site:
+
+```bash
+HUB=kind-grid-llmd-site-a
+SITE=kind-grid-llmd-site-b
+NAME=site-b
+
+# the grid CA bundle, which is what the site checks the enrollment service against
+kubectl --context "$HUB" -n grid-enrollment get secret grid-ca-bundle \
+  -o go-template='{{index .data "ca.crt"}}' | base64 -d \
+  | kubectl --context "$SITE" -n grid create secret generic grid-ca-bundle \
+      --from-file=ca.crt=/dev/stdin
+
+# the one-time invite token
+kubectl --context "$HUB" -n grid-enrollment get secret "grid-invite-$NAME" \
+  -o go-template='{{index .data "token"}}' | base64 -d \
+  | kubectl --context "$SITE" -n grid create secret generic "grid-invite-$NAME" \
+      --from-file=token=/dev/stdin
+
+# the label the operator checks before redeeming
+kubectl --context "$SITE" -n grid label secret "grid-invite-$NAME" \
+  grid.praxis.fast/site="$NAME"
+
+# the shared SWIM key, created once on the hub
+kubectl --context "$HUB" -n grid get secret grid-swim-key \
+  -o go-template='{{index .data "key"}}' | base64 -d \
+  | kubectl --context "$SITE" -n grid create secret generic grid-swim-key \
+      --from-file=key=/dev/stdin
+```
+
+A fleet delivers those over one protected channel, with ACM or External
+Secrets, rather than by hand. Never commit an invite or the SWIM key.
+
+**The operator redeems it** on first start and writes its own identity. The
+enrollment names below are chart defaults, spelled out so the flow is visible:
+
+```bash
+helm upgrade --install grid-operator "$GRID_REPO/charts/grid-operator" \
+  --kube-context "$SITE" -n grid \
+  --set enrollment.enabled=true \
+  --set enrollment.url=https://enroll.grid.demo:8443 \
+  --set enrollment.siteName=site-b \
+  --set enrollment.tokenSecretRef.name=grid-invite-site-b \
+  --set enrollment.caBundle.secret=grid-ca-bundle \
+  --set enrollment.identitySecretName=grid-site-identity \
+  --set enrollment.caSecretName=grid-ca \
+  --set swim.siteName=site-b --set swim.seeds=10.90.0.201:7946 \
+  --set swim.service.type=LoadBalancer \
+  --set swim.service.annotations."metallb\.io/loadBalancerIPs"=10.90.0.221 \
+  --set signals.enabled=true \
+  --set signals.service.annotations."metallb\.io/loadBalancerIPs"=10.90.0.224 \
+  --set gateway.serviceName=provider-gateway --set gateway.port=8443
+```
+
+The invite is one-time. If `grid-site-identity` is deleted the operator retries
+a spent token, so do not let Argo prune it.
+
+Confirm the identity carries the SPIFFE ID the rest of the grid authorizes on:
+
+```bash
+kubectl --context "$SITE" -n grid get secret grid-site-identity \
+  -o go-template='{{index .data "tls.crt"}}' | base64 -d \
+  | openssl x509 -noout -subject -ext subjectAltName
+```
+
+```
+subject=CN=site-b, O=site-b
+X509v3 Subject Alternative Name:
+    DNS:site-b.grid.internal, URI:spiffe://grid.internal/site/site-b
+```
+
+Wait for `grid-site-identity` to appear, then the site topology and the two
+gateways. These carry structured values, so they read better as files than as
+`--set`:
+
+```bash
+helm upgrade --install grid-site     "$GRID_REPO/charts/grid-site"     -n grid -f values/site-b-grid-site.yaml
+helm upgrade --install provider-gateway "$GRID_REPO/charts/praxis-gateway" -n grid -f values/site-b-provider-gateway.yaml
+helm upgrade --install consumer-gateway "$GRID_REPO/charts/praxis-gateway" -n grid -f values/site-b-consumer-gateway.yaml
+```
+
+`grid-site` sets `signalTransport: poll` and `peerTrust: spiffe`, and declares
+the peer. The provider gateway admits peers by SPIFFE ID and forwards to the
+local Envoy. The consumer gateway turns on `gridServing`, which is what makes
+the chart render `grid_site_route` instead of the overlay route.
+
+**The front door**, which mints a caller key and prints it:
+
+```bash
 CTX_A=kind-grid-llmd-site-a CTX_B=kind-grid-llmd-site-b NET=grid-llmd-net \
   ./litellm/start-litellm.sh
-```
-
-`up.sh` runs, in order:
-
-1. Creates a podman network on 10.90.0.0/24 and two kind clusters on it.
-2. Installs MetalLB in each, one pool per site so the two cannot hand out the same address.
-3. Points both clusters' CoreDNS at the hub's enrollment address.
-4. Installs the llm-d layer as one chart per site: InferencePool, two simulators, the endpoint picker, and Envoy.
-5. Installs grid-enrollment on the hub, which creates the Grid CA and one invite per site.
-6. Copies the CA bundle, each site's invite, and the SWIM key, then installs grid-operator per site and waits for each to enroll.
-7. Installs grid-site, the provider gateway, and the consumer gateway per site.
-
-Every component is a chart invoked with one values file. The Grid charts come
-from GRID_REPO; llmd-site ships with the demo:
-
-```
-charts/llmd-site         --set site=<site>
-charts/grid-enrollment   values/hub-grid-enrollment.yaml
-charts/grid-operator     values/<site>-grid-operator.yaml
-charts/grid-site         values/<site>-grid-site.yaml
-charts/praxis-gateway    values/<site>-provider-gateway.yaml
-charts/praxis-gateway    values/<site>-consumer-gateway.yaml
 ```
 
 ## Verify
@@ -99,7 +204,33 @@ praxisConfig:
 `capacity` is the cache size, per backend cluster per gateway replica. See the
 praxis-gateway chart values for the full set and their defaults.
 
-Repeat one prompt and it sticks to a single site; distinct prompts spread.
+**A prompt has to be long enough to have a prefix.** The gateway hashes the
+prompt into 256-byte blocks and needs several before affinity applies, so a
+short test prompt yields no keys and the request routes on load alone. That is
+`not_applicable`, not a misconfiguration.
+
+The gateway counts every decision, which is the way to see this rather than
+inferring it from where traffic landed:
+
+```bash
+kubectl -n grid exec deploy/consumer-gateway -- \
+  wget -qO- http://127.0.0.1:9901/metrics | grep grid_route_prefix_affinity_total
+```
+
+Sending one realistic prompt repeatedly through a single gateway:
+
+```
+grid_route_prefix_affinity_total{outcome="sticky"}          18
+grid_route_prefix_affinity_total{outcome="no_match"}         1
+grid_route_prefix_affinity_total{outcome="not_applicable"}  73
+```
+
+The one `no_match` is the first request, before any site held the prefix. The
+73 `not_applicable` are short prompts sent earlier.
+
+Where the traffic lands says the same thing. Through one gateway, 20 requests
+carrying the same long prompt all went to one site, while 24 distinct prompts
+split 12 and 12.
 
 ## Addresses
 
