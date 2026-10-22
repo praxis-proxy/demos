@@ -1,0 +1,63 @@
+# Site topology for site-a. Signals travel by direct mTLS pull and peers are
+# authorized on their SPIFFE ID. Both are read at operator start.
+
+gridNetwork:
+  name: grid-llmd
+  gridId: grid-llmd-1
+  region: site-a
+  zone: site-a-1
+  routingPolicy: scoreFirst
+  scoringPolicy:
+    strategy: queueDepth
+  metricsRefreshInterval: "10s"
+  signalTransport:
+    mode: poll
+  peerTrust:
+    mode: spiffe
+  consumerGateways:
+    - name: consumer-gateway
+      namespace: grid
+      siteName: site-a
+
+gridSite:
+  name: site-a
+  region: site-a
+  zone: site-a-1
+  providerSiteLabel: site-a
+
+peers:
+  site-b:
+    address: 10.90.0.222:8443
+
+inferenceProviders:
+  - name: qwen-site-a
+    gridNetworkRef: grid-llmd
+    providerKind: llm-d-inference-sim
+    backendKind: local
+    endpoint: "http://10.96.0.100:8081"
+    siteSelector:
+      matchLabels:
+        grid.praxis.fast/provider-site: site-a
+    accessPolicy:
+      siteSelector:
+        matchLabels: {}
+    models:
+      - name: Qwen/Qwen3-0.6B
+        capabilities:
+          - text_generation
+        contextWindow: 4096
+    healthCheck:
+      path: /health
+      interval: 30s
+      timeout: 5s
+    metricsConfig:
+      path: /metrics
+      timeout: 2s
+      staleMetricsSeconds: 20
+      endpoint: "http://llmd-epp-metrics.grid.svc.cluster.local:9090"
+      poolName: site-a
+      queueCapacity: 4
+      signalNames:
+        kvCacheUtilization: llm_d_epp_average_kv_cache_utilization
+        queueDepth: llm_d_epp_average_queue_size
+        healthy: llm_d_epp_ready_endpoints

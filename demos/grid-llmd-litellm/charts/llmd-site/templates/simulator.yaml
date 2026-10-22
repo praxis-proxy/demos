@@ -1,0 +1,85 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vllm-sim
+  namespace: {{ .Release.Namespace }}
+data:
+  config.yaml: |
+    port: {{ .Values.simulator.port }}
+    model: {{ .Values.model | quote }}
+    served-model-name: [{{ .Values.model | quote }}]
+    mode: "echo"
+    max-num-seqs: {{ .Values.simulator.maxNumSeqs }}
+    max-model-len: {{ .Values.simulator.maxModelLen }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-sim
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: {{ .Values.simulator.replicas }}
+  selector:
+    matchLabels:
+      {{- include "llmd-site.modelSelector" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "llmd-site.modelSelector" . | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: config
+          configMap:
+            name: vllm-sim
+      containers:
+        - name: sim
+          image: "{{ .Values.simulator.repository }}:{{ .Values.simulator.tag }}"
+          imagePullPolicy: {{ .Values.simulator.pullPolicy }}
+          args:
+            - --config=/config/config.yaml
+            # No tokenizer download: the demo runs without reaching a model hub.
+            - --force-dummy-tokenizer
+            - --time-to-first-token={{ .Values.simulator.timeToFirstToken }}
+            - --inter-token-latency={{ .Values.simulator.interTokenLatency }}
+            - --logtostderr=true
+          volumeMounts:
+            - name: config
+              mountPath: /config
+          ports:
+            - name: http
+              containerPort: {{ .Values.simulator.port }}
+          startupProbe:
+            httpGet:
+              path: /v1/models
+              port: {{ .Values.simulator.port }}
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.simulator.port }}
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-sim
+  namespace: {{ .Release.Namespace }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "llmd-site.modelSelector" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.simulator.port }}
+      targetPort: {{ .Values.simulator.port }}
