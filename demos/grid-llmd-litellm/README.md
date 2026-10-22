@@ -61,42 +61,25 @@ helm upgrade --install grid-enrollment "$GRID_REPO/charts/grid-enrollment" \
   --set enrollment.service.annotations."metallb\.io/loadBalancerIPs"=10.90.0.205
 ```
 
-**Carrying the invite into the operator.** This is the hop the defaults hide.
-The enrollment chart mints one Secret per invite, `grid-invite-<site>`, in the
-hub's `grid-enrollment` namespace. The site operator looks for a Secret of that
-same name in its own namespace, carrying the site label, and refuses a token
-labelled for another site:
+**Carrying the invite into the operator.** The enrollment chart mints one
+Secret per invite, `grid-invite-<site>`, in the hub's `grid-enrollment`
+namespace. The site operator looks for a Secret of that same name in its own
+namespace, carrying the site label, and refuses a token labelled for another
+site:
 
 ```bash
-HUB=kind-grid-llmd-site-a
-SITE=kind-grid-llmd-site-b
-NAME=site-b
-
-# the grid CA bundle, which is what the site checks the enrollment service against
-kubectl --context "$HUB" -n grid-enrollment get secret grid-ca-bundle \
-  -o go-template='{{index .data "ca.crt"}}' | base64 -d \
-  | kubectl --context "$SITE" -n grid create secret generic grid-ca-bundle \
-      --from-file=ca.crt=/dev/stdin
-
-# the one-time invite token
-kubectl --context "$HUB" -n grid-enrollment get secret "grid-invite-$NAME" \
+kubectl --context "$HUB" -n grid-enrollment get secret grid-invite-site-b \
   -o go-template='{{index .data "token"}}' | base64 -d \
-  | kubectl --context "$SITE" -n grid create secret generic "grid-invite-$NAME" \
+  | kubectl --context "$SITE" -n grid create secret generic grid-invite-site-b \
       --from-file=token=/dev/stdin
-
-# the label the operator checks before redeeming
-kubectl --context "$SITE" -n grid label secret "grid-invite-$NAME" \
-  grid.praxis.fast/site="$NAME"
-
-# the shared SWIM key, created once on the hub
-kubectl --context "$HUB" -n grid get secret grid-swim-key \
-  -o go-template='{{index .data "key"}}' | base64 -d \
-  | kubectl --context "$SITE" -n grid create secret generic grid-swim-key \
-      --from-file=key=/dev/stdin
+kubectl --context "$SITE" -n grid label secret grid-invite-site-b \
+  grid.praxis.fast/site=site-b
 ```
 
-A fleet delivers those over one protected channel, with ACM or External
-Secrets, rather than by hand. Never commit an invite or the SWIM key.
+Two more Secrets travel the same way: `grid-ca-bundle` from `grid-enrollment`,
+which is what the site checks the enrollment service against, and the shared
+`grid-swim-key`. A fleet delivers all three over one protected channel, with
+ACM or External Secrets. Never commit an invite or the SWIM key.
 
 **The operator redeems it** on first start and writes its own identity. The
 enrollment names below are chart defaults, spelled out so the flow is visible:
@@ -125,9 +108,7 @@ a spent token, so do not let Argo prune it.
 Confirm the identity carries the SPIFFE ID the rest of the grid authorizes on:
 
 ```bash
-kubectl --context "$SITE" -n grid get secret grid-site-identity \
-  -o go-template='{{index .data "tls.crt"}}' | base64 -d \
-  | openssl x509 -noout -subject -ext subjectAltName
+kubectl -n grid get secret grid-site-identity -o go-template='{{index .data "tls.crt"}}' | base64 -d | openssl x509 -noout -subject -ext subjectAltName
 ```
 
 ```
@@ -209,8 +190,8 @@ prompt into 256-byte blocks and needs several before affinity applies, so a
 short test prompt yields no keys and the request routes on load alone. That is
 `not_applicable`, not a misconfiguration.
 
-The gateway counts every decision, which is the way to see this rather than
-inferring it from where traffic landed:
+The gateway counts every decision, which beats inferring it from where traffic
+landed:
 
 ```bash
 kubectl -n grid exec deploy/consumer-gateway -- \
@@ -225,12 +206,10 @@ grid_route_prefix_affinity_total{outcome="no_match"}         1
 grid_route_prefix_affinity_total{outcome="not_applicable"}  73
 ```
 
-The one `no_match` is the first request, before any site held the prefix. The
-73 `not_applicable` are short prompts sent earlier.
-
-Where the traffic lands says the same thing. Through one gateway, 20 requests
-carrying the same long prompt all went to one site, while 24 distinct prompts
-split 12 and 12.
+The one `no_match` is the first request, before any site held the prefix; the
+73 `not_applicable` are short prompts sent earlier. The traffic agrees: through
+one gateway, 20 requests carrying the same long prompt all went to one site,
+while 24 distinct prompts split 12 and 12.
 
 ## Addresses
 
