@@ -253,17 +253,31 @@ while 24 distinct prompts split 12 and 12.
 
 ## Reconfiguring the gateway
 
-Two things change a running gateway, and they are not the same.
+The gateway never needs a restart to pick up a new config. It watches the file
+it was started with and swaps the running configuration in place.
 
-**Serving data changes on their own.** The operator rewrites the serving
+**Serving data applies on its own.** The operator rewrites the serving
 ConfigMap whenever the topology moves: a peer goes Active, a provider appears
-or leaves, an address changes. The gateway re-reads the mounted file every few
-seconds and applies it without a restart. That is how the second site's
-candidate arrives after enrollment, with no rollout.
+or leaves, an address changes. The gateway re-reads it every five seconds. That
+is how the second site's candidate arrives after enrollment, with no rollout.
 
-**Gateway settings are a chart value and a rollout.** Routing tuning lives in
-`praxisConfig.render.gridServing.siteRoute`, so changing it means upgrading the
-release. Edit the values file, or set it on the command line:
+**Editing the config reloads it in place.** Change the mounted ConfigMap and
+the running process swaps the new configuration once the kubelet refreshes the
+file:
+
+```
+praxis::reload_diagnostics: config reload audit  chains_modified=1
+praxis::reload: config reload complete  swapped=["gateway"]  skipped=[]
+```
+
+The pod's restart count stays at zero and its start time does not move. One
+guard applies: a reload that would change a provider-hop backend's verified TLS
+identity is refused, because a live grid route cannot silently retarget its
+peer. That one asks for a restart, and says so.
+
+**A chart upgrade does roll the pod**, because the chart stamps the rendered
+config into a `checksum/config` pod annotation. Reach for it when you want the
+release to stay the source of truth:
 
 ```bash
 helm upgrade --install consumer-gateway "$GRID_REPO/charts/praxis-gateway" \
@@ -278,17 +292,14 @@ Pass the values file as well as the overrides. `--reuse-values` carries the old
 values forward and skips any default a newer chart added, which hides new
 settings rather than applying them.
 
-The rendered config is readable, which is the way to confirm a change landed
-rather than trusting the upgrade:
+Either way, read the rendered config back rather than trusting the change
+landed:
 
 ```bash
 kubectl --namespace grid get configmap consumer-gateway-config \
   --output go-template='{{index .data "praxis.yaml"}}' \
   | grep --after-context=8 grid_site_route
 ```
-
-The upgrade re-renders that ConfigMap and rolls the Deployment, so the gateway
-restarts. Expect in-flight requests to drain.
 
 ## Addresses
 
