@@ -1,116 +1,16 @@
-## IBM Verify OAuth client registration source for the policy-engine demo.
+## OAuth clients for import-verify-clients.sh, based on keycloak/realm-export.json.
+## Run import-verify-users.sh first.
 ##
-## Derived from keycloak/realm-export.json — the four clients in that realm,
-## mapped onto Verify's application model. Kept as a CSV for the same reason
-## users.csv is: an operator can diff, edit, or extend it for their own tenant
-## without learning Verify's application JSON.
+## name: application display name. role: mint, exchange, audience, or agent.
+## ropc/client_creds/token_exchange: grant flags.
+## audiences/claims: pipe-separated resource names and token claim names.
+## pdv_id_key/pdv_secret_key: output keys in post_deploy_variables.json.
 ##
-## Column mapping onto Verify's POST /v1.0/applications body:
-##
-##   name             -> name  (the application's display name in the console)
-##   role             -> which demo job this client does; drives the defaults
-##                       below. One of: mint | exchange | audience | agent
-##   ropc             -> providers.oidc.properties.grantTypes.ropc
-##   client_creds     -> providers.oidc.properties.grantTypes.clientCredentials
-##   token_exchange   -> providers.oidc.properties.grantTypes.tokenExchange
-##   audiences        -> providers.oidc.token.audiences        (pipe-separated)
-##   claims           -> providers.oidc.token.attributeMappings (pipe-separated;
-##                       each becomes a CELx mapper — see import-verify-clients.sh)
-##   pdv_id_key       -> where the generated client_id is written back into
-##   pdv_secret_key      post_deploy_variables.json (blank = do not write back)
-##
-## Grant-type cells are true/false and become the QUOTED strings Verify requires.
-## An empty audiences/claims cell means "none".
-##
-## ---------------------------------------------------------------------------
-## `manager` is mapped from a RELATIONSHIP, not from a custom attribute
-## ---------------------------------------------------------------------------
-## The other four claims are sets read out of custom attributes through a CELx
-## mapper that returns getCustomValues() as-is — the trailing "" pad these used to
-## carry is gone, replaced by the engine's `ibmverify` claim-mapper preset (see
-## import-verify-clients.sh). `manager` is different in kind: it is the SCIM
-## EnterpriseUser manager reference, and its mapper traverses it —
-##
-##   statements:
-##     - context: manager := user.getManager()
-##     - return: context.manager.userName
-##
-## — yielding the scalar string "alice". policy-verify-opa.yaml consumes it as
-## require_approval(from: claim.manager) and hands it to CIBA as the login_hint
-## naming the approver, so it must NOT be ["alice", ""]. The importer knows this
-## from its RELATIONSHIP_CLAIMS list; listing the claim here is enough.
-##
-## It is listed on BOTH real clients on purpose. The mint client is where bob's
-## token gets it; the exchange client needs it as well, or the claim is dropped
-## at the RFC 8693 exchange and the gateway — the thing that actually evaluates
-## require_approval — never sees it.
-##
-## ---------------------------------------------------------------------------
-## Why four rows when Verify only needs two clients
-## ---------------------------------------------------------------------------
-## The Keycloak realm has four clients. Only two of them are real OAuth clients
-## on Verify:
-##
-##   hr-copilot     mints user + client tokens (ROPC + client_credentials)
-##   praxis-gateway performs the RFC 8693 exchange
-##
-## They must stay distinct: Verify refuses to let a client exchange its own
-## tokens (CSIAQ5207E), the same split the realm export already has.
-##
-## github-api and workday-api are NOT clients on Verify — they are audience
-## STRINGS in the exchange client's `audiences` list (see delta V1 in
-## docs/brainstorms/2026-08-31-ibm-verify-idp-requirements.md). They are
-## registered here as `role=audience` so this file mirrors the realm export
-## 1:1 and the console shows the same four names a viewer sees in Keycloak.
-##
-## Three things registering them does NOT do:
-##   - it does not make Verify honor a requested `audience` (delta V1: Verify
-##     stamps the exchanging client's fixed list and accepts unregistered
-##     audiences silently);
-##   - it does not reproduce Keycloak's per-audience `gh-permissions-as-scope`
-##     mapper, which is what makes scenario 4's assertion load-bearing there;
-##   - nothing in the demo ever authenticates as either one.
-##
-## They also cannot be pure placeholders: Verify rejects an application with
-## every grant type disabled ("CSIAQ0032 Grant type information is required"),
-## so each carries clientCredentials and nothing else — the narrowest grant
-## that satisfies the API. They mint no user tokens and carry no claim mappers.
-##
-## If you want the console to show only what actually participates in the
-## Verify path, delete these two rows; the demo behaves identically.
-##
-## ---------------------------------------------------------------------------
-## role=agent — the non-human principal (scenario 14)
-## ---------------------------------------------------------------------------
-## An IBM Verify Agent Identity: a governed principal that acts as ITSELF, with
-## no human in the loop. It mints with client_credentials and calls search_repos
-## on its own authority.
-##
-## Three things make it unlike the rows above:
-##
-##   - It carries NO claims. A client_credentials token cannot carry custom
-##     claims on this tenant — attribute mappers read user attributes, and a
-##     client-credentials grant has no user. Verified four ways against
-##     praxis-2; see docs/brainstorms/2026-10-20-verify-agent-identity-requirements.md
-##     (finding E3). The agent's authority is its SCOPE, which does pass through.
-##   - Its OWN client needs no application entitlement: nothing authenticates
-##     TO the agent's client. But it does force a change on the EXCHANGE
-##     client. Application entitlement is checked against the exchange
-##     SUBJECT, and on the agent route the agent IS the subject — an OAuth
-##     client with no SCIM id, so the per-persona grants this demo normally
-##     uses cannot cover it. The importer therefore entitles the exchange
-##     client by BIRTHRIGHT whenever an agent row is present. Without that,
-##     scenario 14 fails at delegate with CSIAQ0279E while 01-13 pass, because
-##     their subjects are real users. (This corrects an earlier note here that
-##     claimed entitlement only ever gates users.)
-##   - It has a second half that is not an OAuth client at all: an Agent
-##     Registry record (POST /v1.0/Agents) that holds the governance state —
-##     owner, tags, and the ACTIVE/SUSPENDED/UNDER_REVIEW status an admin can
-##     flip in the console. The importer creates it and associates this client
-##     with it. The registry id is written back as VERIFY_AGENT_ID.
-##
-## `praxis-gateway` is in its audiences so the gateway can validate the agent's
-## token, and `github-api` so the exchange can narrow to that audience.
+## The mint and exchange clients need separate ids and application entitlement.
+## The agent uses a JWT client-credentials token with no user roles or teams.
+## Its exchange client needs birthright entitlement because the agent has no SCIM
+## user id. The importer also creates an Agent Registry record and writes its id
+## as VERIFY_AGENT_ID. Registry status is enforced by the gateway.
 name,role,ropc,client_creds,token_exchange,audiences,claims,pdv_id_key,pdv_secret_key
 hr-copilot,mint,true,true,false,praxis-gateway|workday-api|github-api,roles|permissions|teams|gh_permissions|manager,HR_COPILOT_CLIENT_ID,HR_COPILOT_CLIENT_SECRET
 praxis-gateway,exchange,false,true,true,workday-api|github-api,roles|permissions|teams|gh_permissions|manager,GATEWAY_CLIENT_ID,GATEWAY_CLIENT_SECRET

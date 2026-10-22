@@ -1,23 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Praxis Contributors
 
-//! Reads an agent's lifecycle status from the IBM Verify Agent Registry, and
-//! caches the answer for a configured interval.
-//!
-//! # The cache interval is the revocation window
-//!
-//! An agent suspended at the tenant keeps passing until its entry expires.
-//! That is the same trade the bundled api-key directory cache documents, and
-//! it is the honest comparison point against a SPIFFE SVID's TTL: neither
-//! mechanism is instant, and both windows are a configured number.
-//!
-//! # Failures are never cached
-//!
-//! A registry that could not answer is asked again on the next call. Caching
-//! the failure would turn a blip into an outage lasting the full TTL, at
-//! exactly the moment an operator is trying to recover it. The cost is that a
-//! sustained outage means a lookup per call — which is the right cost, because
-//! the alternative is a stale verdict about who may act.
+//! Read agent status from IBM Verify and cache successful lookups.
+//! Suspension takes effect when the cached entry expires. Failed lookups are
+//! retried on the next call.
 
 use std::sync::RwLock;
 use std::time::{Duration, Instant};
@@ -34,9 +20,7 @@ struct CachedStatus {
     expires_at: Instant,
 }
 
-/// Caches one agent's status. One agent per plugin instance, so this is a
-/// single slot rather than a map — no key, nothing to evict, and no
-/// unbounded-growth question to answer.
+/// Single-entry cache for the agent configured on this plugin instance.
 pub struct StatusCache {
     slot: RwLock<Option<CachedStatus>>,
     ttl: Duration,
@@ -53,9 +37,7 @@ impl StatusCache {
 
     /// The cached status, when one is present and still fresh.
     pub fn get(&self) -> Option<String> {
-        // A poisoned lock means another thread panicked holding it. Treat that
-        // as a cache miss rather than propagating: a miss costs one lookup,
-        // whereas unwrapping would turn an unrelated panic into a denial.
+        // Treat a poisoned lock as a cache miss.
         let guard = self.slot.read().ok()?;
         let entry = guard.as_ref()?;
         (entry.expires_at > Instant::now()).then(|| entry.status.clone())
@@ -76,22 +58,18 @@ impl StatusCache {
 pub struct RegistryClient {
     /// Agent Registry collection URL (the agent id is appended).
     pub registry_url: String,
-    /// Token endpoint for the admin client-credentials mint.
+    /// Token endpoint for the registry reader's client-credentials grant.
     pub token_url: String,
-    /// Admin client id.
+    /// Registry reader client id.
     pub admin_client_id: String,
-    /// Admin client secret.
+    /// Registry reader client secret.
     pub admin_client_secret: String,
     /// Per-request deadline.
     pub timeout: Duration,
 }
 
 impl RegistryClient {
-    /// Fetch `agent_id`'s status.
-    ///
-    /// Returns [`StatusLookup::Unavailable`] rather than an error for every
-    /// failure mode: the caller's job is to decide allow/deny, and it needs a
-    /// reason string, not a typed error it would only stringify.
+    /// Fetch agent status, returning StatusLookup::Unavailable on lookup failure.
     pub async fn fetch_status(
         &self,
         svc: &dyn HostServices,
@@ -120,10 +98,7 @@ impl RegistryClient {
 
         match resp.status {
             200 => Self::read_status(&resp.body),
-            // A record that is not there is not an authorized agent. Reported
-            // as Unavailable rather than as a status so the violation says
-            // "could not confirm" instead of naming a status the tenant never
-            // returned.
+            // A missing record cannot authorize the agent.
             404 => StatusLookup::Unavailable(format!("no agent record for id {agent_id}")),
             403 => StatusLookup::Unavailable(
                 "registry refused the admin client (403) — check its entitlements".to_owned(),
@@ -140,8 +115,7 @@ impl RegistryClient {
         };
         match parsed.get("status").and_then(serde_json::Value::as_str) {
             Some(s) if !s.is_empty() => StatusLookup::Known(s.to_owned()),
-            // Absent or non-string. NOT treated as ACTIVE: a record whose
-            // status cannot be read is a record whose status is unknown.
+            // Missing or invalid status fails closed.
             _ => StatusLookup::Unavailable("registry record carried no `status` field".to_owned()),
         }
     }
@@ -160,9 +134,7 @@ impl RegistryClient {
             .timeout(self.timeout)
             .body(form.into_bytes().into());
 
-        // A client_credentials mint is not idempotent in the sense that
-        // matters: a retried-but-delivered request issues a second token.
-        // undelivered_only retries only when the request never arrived.
+        // Retry only undelivered requests to avoid issuing duplicate tokens.
         let resp = svc
             .http_request(req, RetryPolicy::undelivered_only())
             .await
@@ -183,10 +155,6 @@ impl RegistryClient {
 }
 
 /// Percent-encode a form value.
-///
-/// Hand-rolled rather than pulling a dependency in for two fields: a client id
-/// is a UUID and a secret is base64url-ish, so the set below covers them, and
-/// anything outside it is encoded rather than passed through.
 fn urlencode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
@@ -218,7 +186,6 @@ mod tests {
         assert_eq!(c.get(), None);
     }
 
-    /// The revocation window closing is the behavior the demo depends on.
     #[test]
     fn an_expired_entry_is_a_miss() {
         let c = StatusCache::new(Duration::from_millis(1));
@@ -244,7 +211,6 @@ mod tests {
         );
     }
 
-    /// A record we cannot read the status of is not an ACTIVE record.
     #[test]
     fn a_record_without_status_is_unavailable_not_active() {
         let body = br#"{"id":"x","displayName":"a"}"#;

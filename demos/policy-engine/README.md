@@ -172,18 +172,10 @@ The gateway is a thin crate (`gateway/`) that composes **praxis-ai**'s AI filter
 (the `mcp` protocol classifier) with praxis's **`policy`** filter. Both filters
 register themselves, so there is no manual wiring.
 
-Since **praxis 0.6.0** the published `praxis-proxy-filter` carries
-`policy-engine` in its default features, so praxis comes from crates.io and
-there is no praxis checkout to resolve. The `[patch]` block in
-`gateway/Cargo.toml` is down to two jobs:
-
-* the engine's `praxis-policy-core` and `praxis-policy-orchestration`, so the
-  two unpublished reference plugins and the published engine share one copy of
-  each. Two copies of `praxis-policy-core` means two `PluginFactory` traits and
-  the host registration in `main.rs` stops compiling.
-* praxis-ai pins praxis by git rev, which `[patch.crates-io]` cannot reach, so a
-  second `[patch]` redirects that source to the published version. Without it
-  the graph holds praxis twice.
+The gateway uses published Praxis crates. The two `[patch.crates-io]` entries
+in `gateway/Cargo.toml` share the policy core and orchestration crates with the
+unpublished plugins. Duplicate policy-core crates define incompatible
+`PluginFactory` traits and prevent plugin registration from compiling.
 
 One checkout is still needed, at `gateway/.policy`, because the reference
 plugins are unpublished. `build-gateway.sh` resolves it, first match wins:
@@ -206,22 +198,17 @@ GATEWAY_PROFILE=debug ./restart.sh            # faster build
 GATEWAY_BIN=<path> ./restart.sh               # skip building
 ```
 
-Both upstreams are pinned so a run is reproducible: the engine to
-`DEFAULT_PPE_REF` in `build-gateway.sh`, praxis-ai to the `rev` in
-`gateway/Cargo.toml`, and praxis to the `praxis-proxy-*` version beside it.
-praxis and the engine are one change split across two repos, so bump that pair
-together. praxis-ai needs bumping alongside praxis whenever the two disagree on
-the pingora fork or on a feature gate: praxis 0.6.0 moved several items behind
-`chain-binding`, which is why the gateway enables it.
+The policy engine tag (`DEFAULT_PPE_REF`), praxis-ai revision, and Praxis crate
+versions are set in `build-gateway.sh` and `gateway/Cargo.toml`. Keep the policy
+checkout compatible with the engine required by Praxis, and the praxis-ai
+revision compatible with its Praxis and Pingora versions.
 
-`build-gateway.sh` checks the resolved graph before and after building, and
-fails with the drifted pin named rather than letting the mismatch surface as a
-type error deep in a cargo build. A stale `Cargo.lock` is the common case and it
-heals that one itself by regenerating.
+`build-gateway.sh` checks for duplicate crates and unused patches before and
+after building. It regenerates a stale lockfile once before reporting a conflict.
 
 ## Scenarios
 
-Thirteen scenarios cover every feature in the filter. Run any one directly, for
+Fourteen scenarios cover the policy features used by this demo. Run any one directly, for
 example `./scenarios/01-bob-allow.sh`, or all of them with `./run-scenarios.sh`.
 
 Each scenario checks its own expectations and exits non-zero when one is not
@@ -248,7 +235,7 @@ rather than one the caller sent.
 | 11 | Bob adjusts compensation by > $10k | Human-in-the-loop: the gateway suspends with `-32120`, Alice approves out-of-band (CIBA), then it applies |
 | 12 | Bob calls `get_compensation`, then again spoofing an asserted header | `assertions:` renders identity into upstream headers, strips his raw token, and refuses to forward a header he set himself |
 | 13 | The agent calls `get_headcount` with only its SPIFFE JWT-SVID | Workload identity: the agent gets its SVID by attestation, the route authenticates by the SVID alone, and two-leg delegation obtains a `workday-api` token. No person involved. An unregistered process gets no SVID. Needs `WITH_SPIRE=1`; skipped otherwise |
-| 14 | A governed IBM Verify **agent identity** calls `search_repos_agent` as itself, then an admin **suspends** it | Agent governance: the agent is a record in the Agent Registry with an owner, tags and a lifecycle status. It authenticates with `client_credentials` — no human, no user token — and the gateway refuses it the moment its status is not `ACTIVE`. Verify *records* the status but does not enforce it at the token endpoint (a suspended agent still mints tokens), so policy is the kill switch. Needs `USE_VERIFY=true` and a provisioned agent; skipped otherwise |
+| 14 | A Verify agent calls `search_repos_agent`, then is suspended | Registry status enforcement after the cache TTL expires. Requires `USE_VERIFY=true` and a provisioned agent; skipped otherwise |
 
 Scenarios 10 and 11 exercise the human-in-the-loop flow described in
 [Human-in-the-loop: manager approval](#human-in-the-loop-manager-approval)
@@ -307,20 +294,11 @@ USE_VERIFY=true GATEWAY_CONFIG=praxis-verify-cedar.yaml ./restart.sh
 ./scenarios/05-alice-external-cedar-deny.sh   # -32001 deny, violation cedar.default_deny
 ```
 
-**Both switches are required, and they cover different halves of the path:**
-`GATEWAY_CONFIG` picks which IdP the *gateway* validates and exchanges against;
-`USE_VERIFY` picks which IdP the *scenario scripts* mint from. Mismatch them and
-the failure is at least legible — minting from Keycloak against a Verify-only
-gateway yields `auth.untrusted_issuer`.
+Set `GATEWAY_CONFIG` to select the gateway's IdP and `USE_VERIFY=true` so the
+scenario scripts mint from Verify. A token from an untrusted issuer fails with
+`auth.untrusted_issuer`.
 
-The argument here is what does *not* change. Diff a Verify policy document
-against its Keycloak sibling and every difference falls in the identity and
-delegation blocks — the routes, the PDP rule, the PII scanner, the redaction
-rules, the taint labels and the audit logger are identical:
-
-```bash
-diff policy-verify-cedar.yaml policy-cedar.yaml
-```
+The Verify variants use the same PDP rules as their Keycloak counterparts.
 
 Three things to know before demoing the Verify path:
 
@@ -332,22 +310,17 @@ Three things to know before demoing the Verify path:
 - **Needs a tenant and a secret.** Copy `.env.verify.example` to `.env.verify`
   and fill in `VERIFY_GATEWAY_CLIENT_SECRET`. The tenant URL and exchange
   client id default to `post_deploy_variables.json`.
-- **Scenario 11 stays on Keycloak.** The CIBA plugin still points at Keycloak,
-  and the tenant blocks the grant besides (no `manager` claim). Scenario 10 is
-  under-threshold so it never reaches the plugin and passes either way.
+- **Run scenario 11 on Keycloak.** The default Verify templates still use
+  Keycloak CIBA endpoints. Scenario 10 does not reach the approval step.
 
-Two deltas change what can honestly be narrated on the Verify path, both
-properties of the tenant rather than the gateway, and neither changes a scenario
-outcome. They are documented at the top of each `policy-verify-*.yaml.tmpl`:
-`aud` is client-bound rather than request-scoped (say "exchanged token," not
-"audience-scoped token"), and the `search_repos` permissions check is a scope
-echo rather than an entitlement decision.
+On the reference Verify tenant, exchanged tokens carry the client's registered
+audience list. The `search_repos` permissions check also reflects the requested
+scope rather than a separate IdP entitlement decision.
 
 ## Assertions: what the upstream is told
 
-Every other scenario shows the gateway *deciding*. This is the only channel that
-carries a decision onward. `global.assertions.request:` renders engine-derived
-identity into request headers `hr-mcp` can read:
+`global.assertions.request:` renders engine-derived identity into request
+headers `hr-mcp` can read:
 
 ```yaml
 global:
@@ -381,10 +354,8 @@ and no `x-user-token`: the contract strips it, and `delegate(...)` already
 replaced `authorization` with the minted workday-api token, so the upstream holds
 no credential Bob issued.
 
-**The trust model, first, because it is the whole story.** These headers are
-**unsigned**. `hr-mcp` believes `x-auth-user-id` because it believes nothing
-between the gateway and itself can set that header. If that is not true of your
-network, this feature is not what makes it true.
+These headers are **unsigned**. The backend must trust its connection to the
+gateway and prevent other callers from supplying trusted identity headers.
 
 That is also why removal is unconditional. Every header an entry targets is
 removed before injection, whether or not the source resolved to anything — so an
@@ -397,10 +368,8 @@ request headers are refused as sources in code, with no config surface to widen
 them, because rendering a client-supplied header into one the upstream trusts is
 exactly the laundering this prevents.
 
-A collection must declare an `encode:`, since a set arriving in a shape nobody
-chose is a shape nobody can rely on. Collections render sorted and a `members:`
-object's keys are sorted, so one identity produces identical header bytes every
-request and audit hashes stay stable.
+A collection must declare an `encode:`. Collections and `members:` object keys
+are sorted to produce stable header values and audit hashes.
 
 `strip:` cannot remove a **protocol floor** header — `host`, `content-type`,
 `content-length`, `transfer-encoding` on the way in — and a config that tries
@@ -603,7 +572,9 @@ Without `WITH_SPIRE=1` the demo is unchanged, and scenario 13 reports itself ski
 
 Two things make the `get_headcount` route different from the others.
 
-**It authenticates by the SVID alone.** The route's `authentication:` block sets `replace_inherited: true` with a single `jwt-workload` step, so the global user and client resolvers do not run. No `X-User-Token` and no `Authorization` header are needed; the agent's own identity is the whole story.
+The route authenticates with the SVID alone. Its `authentication:` block sets
+`replace_inherited: true` with one `jwt-workload` step, skipping the global user
+and client resolvers. It needs neither `X-User-Token` nor `Authorization`.
 
 **Delegation runs in two legs.** Keycloak accepts a SPIFFE SVID only as an RFC 7523 `client_assertion`, never as a token-exchange `subject_token`. So `delegate(..., subject: caller_workload)` makes two calls:
 
@@ -641,79 +612,43 @@ What this attests is narrow: the process runs as uid 1001, on a node that joined
 - `spire/verify-svid-flow.sh` runs the whole chain in three calls (fetch the agent's SVID, use it as a client assertion for the base token, exchange that for a `workday-api` token) and prints the decoded claims at each step. It is the quickest way to confirm the Keycloak setup before running scenario 13.
 - `spire/verify-dual-principal.sh` probes whether Keycloak accepts an agent credential as the RFC 8693 `actor_token` alongside a user's token, the "user, with the agent named as actor" case, and reports which form of actor token works.
 
-## Agent governance: the agent is approved, not just identified
+## Agent governance
 
-Scenario 13 answers *"is this really the agent?"* — SPIRE attests the process
-and issues an SVID, and a process that fails attestation gets nothing. What it
-cannot answer is *"should this agent be running at all, today?"* There is no
-registry of agents, no owner, no status, and no way for a human to revoke one
-without editing registration entries or waiting out a TTL.
-
-Scenario 14 is that missing half. The agent is an **IBM Verify Agent
-Identity**: a record in the Agent Registry with a display name, an owner, tags,
-and a lifecycle status (`ACTIVE` / `SUSPENDED` / `UNDER_REVIEW` / `DEFAULT`). It
-authenticates as itself with `client_credentials` — no human, no user token, no
-`Authorization` header — and calls a tool on its own authority. Then an admin
-suspends it in the console, and the next call fails.
+Scenario 14 authenticates an IBM Verify agent with a client-credentials JWT and
+checks its Agent Registry status before allowing a tool call. The record holds
+the agent's owner, tags, and lifecycle status. The scenario suspends the agent,
+checks that the gateway denies its calls, and restores its status on exit.
 
 ```bash
 USE_VERIFY=true GATEWAY_CONFIG=praxis-verify-opa.yaml ./restart.sh
 ./verify/import-verify-clients.sh                 # creates the agent + its registry record
 USE_VERIFY=true ./scenarios/14-verify-agent-identity.sh
 
-./verify/set-agent-status.sh SUSPENDED            # flip it by hand, mid-demo
+./verify/set-agent-status.sh SUSPENDED            # suspend manually
 ./verify/set-agent-status.sh                      # report the current status
 ./verify/set-agent-status.sh ACTIVE
 ```
 
-**The gateway enforces the status; Verify records it.** This is worth stating
-plainly because it is the one counter-intuitive part: IBM Verify does *not* gate
-token issuance on agent status. A `SUSPENDED` agent still mints tokens, and
-tokens minted before the suspend stay valid — verified against a live tenant.
-So the kill switch cannot live at the IdP.
+Verify can issue tokens to suspended agents. `run(agent-status)` checks
+`/v1.0/Agents/{id}` and denies with `auth.agent_suspended` unless the status is
+`ACTIVE`. A cached status remains valid for `cache_ttl_seconds`; scenario 14
+waits for it to expire before checking denial.
 
-That is also IBM's own architecture rather than a workaround. The
-Agent-Identity-with-Vault cookbook has the token exchange succeed while the
-*resource* denies for a missing or invalid agent registration. Praxis is the
-resource in this demo, so `run(agent-status)` is where the refusal happens:
-the gateway reads `/v1.0/Agents/{id}` and denies with `auth.agent_suspended`
-unless the status is `ACTIVE`.
+The importer creates separate credentials for status checks and status changes:
 
-**Reading the status and changing it are two different credentials.** Both are
-created by `import-verify-clients.sh`, each holding exactly one entitlement:
-
-| Client | Entitlement | Held by |
+| Client | Entitlement | Used by |
 |---|---|---|
-| reader | `readAgents` | the gateway, per request |
-| operator | `manageAgentStatus` | `set-agent-status.sh` / a human admin |
+| reader | `readAgents` | gateway |
+| operator | `manageAgentStatus` | `set-agent-status.sh` / operator |
 
-The gateway can read an agent record and nothing else — `PUT /v1.0/Agents` is
-403 for it. That is the point: the gateway is the component most exposed to
-agent traffic, and if it could also change status, a compromised gateway could
-re-enable the agent its own policy had just suspended. The kill switch would be
-its own bypass.
+The gateway reader cannot change status. The operator credential permits status
+changes while preserving the other record fields. Tenant-admin credentials are
+used for provisioning.
 
-`manageAgentStatus` is narrow in the other direction — it permits a status
-change and nothing else, not even renaming the agent (403 `CSINH2507E`). The
-tenant-admin credentials are **provisioning-only**; nothing on the demo path
-reads them.
-
-**The revocation window is real and is a configured number.** The plugin caches
-the status, and `cache_ttl_seconds` is how long a suspended agent keeps working.
-Scenario 14 waits it out rather than hiding it. SPIFFE has the same shape of
-problem with SVID TTL; neither mechanism is instant, and both windows are
-something an operator chooses.
-
-**Neither scenario ports to the other IdP.** Keycloak's SPIFFE-native client
-authentication (`providerId: spiffe`, `client_assertion_type: …jwt-spiffe`) has
-no IBM Verify counterpart, and Verify's Agent Registry has no Keycloak
-counterpart. 13 is Keycloak-only, 14 is Verify-only, and each reports itself
-skipped on the other path. They make different points about agent identity and
-the demo keeps both.
-
-One convergence worth knowing about but not built here: Verify's Agent Registry
-accepts `authMethods` of type `svid-jwt` and `svid-x509`, so it can *govern* a
-SPIFFE identity rather than compete with one. See the brainstorm's finding E9.
+Scenario 13 requires Keycloak's SPIFFE client authentication and the SPIRE
+overlay. Scenario 14 requires Verify Agent Registry. Each skips when its
+required IdP or optional services are unavailable. See
+[IdP usage by scenario](docs/idp-usage-by-scenario.md).
 
 ## Notes
 

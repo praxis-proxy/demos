@@ -1,17 +1,6 @@
-# Praxis listener for the HR demo — IBM Verify variant of praxis-opa.yaml.
-#
-# Identical to praxis-opa.yaml except the policy filter loads
-# policy-verify-opa.yaml, whose delegators exchange tokens at IBM Verify
-# instead of Keycloak. Run with:
-#
-#   USE_VERIFY=true GATEWAY_CONFIG=praxis-verify-opa.yaml ./restart.sh
-#
-# Both switches are needed and they cover different halves of the path:
-#   GATEWAY_CONFIG  — which IdP the *gateway* validates and exchanges against
-#   USE_VERIFY      — which IdP the *scenario scripts* mint from (scenarios/_lib.sh)
-#
-# Mismatch them and the failure is legible rather than silent: minting from
-# Keycloak while the gateway trusts only Verify yields auth.untrusted_issuer.
+# IBM Verify + OPA gateway.
+# Run: USE_VERIFY=true GATEWAY_CONFIG=praxis-verify-opa.yaml ./restart.sh
+# Edit policy-verify-opa.yaml.tmpl; restart.sh renders the policy file.
 
 listeners:
   - name: gateway
@@ -29,10 +18,7 @@ filter_chains:
 
       - filter: policy
         config_path: ./policy-verify-opa.yaml
-        # Verify is public HTTPS, so the IdP side needs no loopback opt-in.
-        # Kept true only because the CIBA plugin (manager-approver) still
-        # points at Keycloak on localhost — see the note in
-        # policy-verify-opa.yaml. Drop this once CIBA moves to Verify.
+        # Allow the local Keycloak approval endpoint and any trusted Keycloak issuer.
         allow_private_idp: true
         body_access: read_write
 
@@ -48,8 +34,6 @@ filter_chains:
               # Host-bound port of the docker-compose `hr-mcp` service.
               - "127.0.0.1:9100"
 
-# The mock HR MCP server (:9100) and Valkey (:6379) are still local even on the
-# Verify path — only identity and delegation move off-box. Praxis refuses a
-# private or loopback endpoint unless a config says so out loud.
+# The MCP backend and Valkey run locally.
 insecure_options:
   allow_private_endpoints: true # demo proxies to local backends

@@ -1,71 +1,19 @@
 #!/usr/bin/env bash
-# Render policy-verify-<variant>.yaml from policy-verify-<variant>.yaml.tmpl,
-# for each of the three PDP variants on the IBM Verify path (opa, cel, cedar).
 #
-# The Verify path's tenant URL and exchange client_id are tenant-specific, and
-# Verify GENERATES client ids — so a rebuilt tenant invalidates whatever is
-# committed. Praxis has no env-var support for `client_id` (only the client
-# SECRET has a `client_secret_source: {kind: env_var}` indirection; client_id is
-# a plain String read straight into the outbound Basic auth header), so
-# substitution has to happen before the gateway reads the file. This script is
-# that step.
-#
-# The two substituted values are variant-independent, so they are resolved once
-# and every selected variant gets the same tenant and client id.
+# Render IBM Verify policies with tenant and client ids from the environment
+# or post_deploy_variables.json. restart.sh calls this for the selected variant.
 #
 # Usage:
-#   ./render-verify-config.sh              # render all three, skipping up-to-date
-#   ./render-verify-config.sh cel          # render only the CEL variant
-#   ./render-verify-config.sh opa cedar    # render a subset
-#   ./render-verify-config.sh --force      # re-render even if up to date
-#   ./render-verify-config.sh --check      # verify only; non-zero if any stale
-#   ./render-verify-config.sh --print cel  # render to stdout, write nothing
+#   ./render-verify-config.sh [opa|cel|cedar ...]
+#   ./render-verify-config.sh --force       # overwrite current output
+#   ./render-verify-config.sh --check       # fail if output is stale
+#   ./render-verify-config.sh --print cel   # stdout; one variant only
 #
-# --print needs exactly one variant: concatenating three policy documents onto
-# one stream produces a file that is not a valid config for anything.
-#
-# restart.sh calls this automatically for any *verify* GATEWAY_CONFIG, passing
-# the variant that matches it, so the normal path needs nothing.
-#
-# Requires: python3 (already required by verify/import-verify-*.sh).
-# Deliberately NOT envsubst: that is gettext, absent from a stock macOS and from
-# minimal Linux images, and it would substitute every $VAR in the file rather
-# than the two intended ones.
-#
-# ---------------------------------------------------------------------------
-# What is and is not substituted
-# ---------------------------------------------------------------------------
-#   ${VERIFY_TENANT_URL}         default: IBM_VERIFY_TOKEN_ENDPOINT in
-#                                post_deploy_variables.json, minus /oauth2/token
-#   ${VERIFY_GATEWAY_CLIENT_ID}  default: GATEWAY_CLIENT_ID in that same file
-#
-# The client SECRET is deliberately absent. It stays a runtime lookup by the
-# gateway (client_secret_source: {kind: env_var}), so a live credential never
-# lands in a rendered file. Keep it that way: this output is a plain file in the
-# working tree, and the gitignore entry is the only thing between it and a commit.
-#
-# The Keycloak CIBA endpoints in the template are literal localhost URLs and are
-# NOT templated — that plugin still points at Keycloak (see the note in the
-# template), so templating them would imply a portability that does not exist.
-#
-# ---------------------------------------------------------------------------
-# Two kinds of ${...}, and why the distinction is load-bearing
-# ---------------------------------------------------------------------------
-# The Cedar template writes `id: ${args.repo_name}` — a PRAXIS interpolation,
-# resolved per-request by the gateway from the live tool args. It must survive
-# into the rendered file untouched.
-#
-# So the two namespaces are split by case, which is why the convention is worth
-# keeping:
-#
-#   ${UPPER_SNAKE}   this script's placeholders. Unknown ones abort the render,
-#                    and any left unsubstituted abort it too.
-#   ${anything.else} Praxis's own, passed through verbatim.
-#
-# The strictness on the first is the point: an unresolved ${VERIFY_...} would
-# reach the gateway as a literal string, pass the non-empty client_id check, and
-# fail much later at the token endpoint as invalid_client — a long way from the
-# typo that caused it.
+# Substitutes VERIFY_TENANT_URL, VERIFY_GATEWAY_CLIENT_ID, VERIFY_AGENT_ID, and
+# VERIFY_AGENT_READER_CLIENT_ID. Optional agent ids may be empty. Secrets remain
+# runtime environment lookups. Unknown ${UPPER_SNAKE} placeholders fail; Praxis
+# expressions such as ${args.repo_name} pass through unchanged.
+# Requires: python3.
 
 set -euo pipefail
 
@@ -73,9 +21,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 
 PDV="post_deploy_variables.json"
 
-# The variants, in the order they are rendered and reported. A variant is just a
-# (template, output) pair sharing one tenant and client id, so adding a fourth
-# PDP means one entry here and one template file — nothing else in this script.
+# Supported template/output pairs.
 ALL_VARIANTS=(opa cel cedar)
 
 tmpl_for() { echo "policy-verify-$1.yaml.tmpl"; }
@@ -134,16 +80,11 @@ if [ "$PRINT" = true ] && [ "${#VARIANTS[@]}" -ne 1 ]; then
   die "--print needs exactly one variant (one of: ${ALL_VARIANTS[*]})"
 fi
 
-# --- resolve the values ----------------------------------------------------
-# An already-exported value wins, so a one-off run or CI can override without
-# editing any file. Otherwise fall back to post_deploy_variables.json, which is
-# what verify/import-verify-clients.sh writes the generated ids into.
+# Exported values override post_deploy_variables.json.
 TENANT_URL="${VERIFY_TENANT_URL:-}"
 CLIENT_ID="${VERIFY_GATEWAY_CLIENT_ID:-}"
-# Scenario 14's agent principal. Optional: the Verify templates reference these
-# only in the agent route, and a tenant without Agent Identity (Early Access)
-# has neither. Empty renders a config whose agent route cannot authorize, which
-# is what makes scenario 14 skip rather than fail — see its exit-77 guard.
+# Agent ids are optional for tenants without Agent Registry. Scenario 14 skips
+# when they are absent; its route cannot authorize an unconfigured agent.
 AGENT_ID="${VERIFY_AGENT_ID:-}"
 # The gateway's runtime credential for reading agent status: a readAgents-only
 # API client, NOT the admin pair. See the note in the Verify templates.
@@ -181,9 +122,7 @@ if [ -z "$READER_CLIENT_ID" ]; then
   )
 fi
 
-# A trailing slash would produce a double slash in the issuer, and an issuer
-# mismatch fails as auth.untrusted_issuer — legible, but not obviously a config
-# typo. Normalise instead.
+# Normalize the tenant URL before constructing issuer URLs.
 TENANT_URL="${TENANT_URL%/}"
 
 case "$TENANT_URL" in
@@ -192,14 +131,7 @@ case "$TENANT_URL" in
   *) die "VERIFY_TENANT_URL must be an absolute https:// URL, got '$TENANT_URL'" ;;
 esac
 
-# --- render ---------------------------------------------------------------
-# Substitute exactly the two known placeholders, then assert no ${UPPER_SNAKE}
-# remains. A leftover one would otherwise reach the gateway as a literal string:
-# an unresolved client_id passes the non-empty check and fails much later at the
-# token endpoint as invalid_client.
-#
-# Praxis's own ${args.*} interpolations are lower-case and dotted, and are
-# deliberately left alone — see the namespace note in the header.
+# Substitute renderer placeholders and preserve Praxis expressions.
 render() {
   python3 -I - "$1" "$TENANT_URL" "$CLIENT_ID" "$AGENT_ID" "$READER_CLIENT_ID" <<'PY'
 import re, sys
@@ -217,13 +149,10 @@ mapping = {
     "VERIFY_AGENT_READER_CLIENT_ID": reader_client_id,
 }
 
-# This script owns the ${UPPER_SNAKE} namespace; Praxis owns everything else
-# (e.g. ${args.repo_name} in the Cedar template, resolved per-request by the
-# gateway). Matching only UPPER_SNAKE keeps the two from colliding.
+# Match renderer placeholders only; preserve Praxis expressions like ${args.repo_name}.
 OURS = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
 
-# Within our own namespace, an unrecognised name is a typo or a new variable
-# someone forgot to wire up, and must not pass silently.
+# Reject unknown renderer placeholders.
 unknown = {m.group(1) for m in OURS.finditer(text) if m.group(1) not in mapping}
 if unknown:
     sys.exit("template references unknown variable(s): "
@@ -237,8 +166,7 @@ leftover = sorted({m.group(0) for m in OURS.finditer(text)})
 if leftover:
     sys.exit("unsubstituted placeholder(s) remain: " + ", ".join(leftover))
 
-# The generated file must not be edited by hand, and it is gitignored — say both
-# at the top, since that is the only place a reader will look.
+# Prefix generated output with its source and tenant identifiers.
 banner = (
     "# GENERATED FILE — DO NOT EDIT.\n"
     "#\n"
@@ -260,10 +188,7 @@ if [ "$PRINT" = true ]; then
   exit 0
 fi
 
-# One variant per iteration. A failure in one is recorded and the rest still
-# run: on a --check that means the report names every stale file rather than
-# only the first, and on a render it means one broken template does not hide
-# the state of the others.
+# Continue after a failed variant and report all stale or broken outputs.
 STALE=0
 
 for variant in "${VARIANTS[@]}"; do

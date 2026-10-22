@@ -2,26 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Praxis Contributors
 #
-# Bob (HR, perm.email_send) tries to send an email whose body
-# carries an SSN-like pattern. APL's coarse `require(perm.email_send)`
-# passes (Bob has the perm), but the PII scanner plugin walks the
-# args, detects the SSN pattern, and denies the call.
-#
-# This demonstrates a field-level plugin in action — caught BEFORE
-# the email backend is touched. The audit-logger plugin is ordered
-# ahead of pii-scan in the policy chain (see policy-cedar.yaml), so it emits
-# its observation record before the PII deny short-circuits the
-# chain — the denied attempt is still on the audit trail.
-#
-# Expected:
-#   * HTTP 200 + JSON-RPC error -32001, data.violation=`pii.detected`
-#     (gateway denials use the MCP Tools-spec JSON-RPC error envelope,
-#     not HTTP 4xx)
-#   * Backend (hr-mcp) NEVER receives the call — the deny is
-#     enforced at the gateway plugin layer
-#   * A JSON audit record describing the denied send_email attempt is
-#     emitted to the gateway log and shown inline below (when the
-#     gateway's output was teed to ./gateway.log, as restart.sh does)
+# Bob has email_send, but an SSN in the body triggers pii.detected.
+# Expect JSON-RPC -32001, no upstream call, and an audit record of the attempt.
 
 set -euo pipefail
 source "$(dirname "$0")/_lib.sh"

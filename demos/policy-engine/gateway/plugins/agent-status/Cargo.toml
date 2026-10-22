@@ -1,26 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Praxis Contributors
 
-# praxis-policy-plugin-agent-status — identity.resolve plugin that denies a
-# request when the calling agent's IBM Verify Agent Registry status is not
-# ACTIVE.
-#
-# Why this exists: IBM Verify records an agent's lifecycle status but does NOT
-# enforce it at the token endpoint — a SUSPENDED agent still mints tokens, and
-# tokens issued before a suspend stay valid. Enforcement therefore belongs at
-# the policy layer, which is also where IBM's own Vault cookbook puts it (the
-# resource denies; the IdP still issues).
-#
-# Out-of-tree by design: `gateway/.policy/` is a vendored checkout of the engine
-# (and its own git repo), so this crate lives beside it rather than inside it,
-# and the host registers it in gateway/src/main.rs. See the note in
-# gateway/Cargo.toml.
+# Checks IBM Verify Agent Registry status before a tool call.
+# Registered by gateway/src/main.rs.
 [package]
 name = "praxis-policy-plugin-agent-status"
 publish = false
-# Explicit rather than `*.workspace = true`: the reference plugins under
-# .policy/reference/ inherit these from the ENGINE's workspace, which this
-# crate is deliberately not a member of.
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"

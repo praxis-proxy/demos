@@ -1,90 +1,45 @@
 #!/usr/bin/env bash
-# One-shot restart for the Praxis Policy Engine demo. Useful when:
-#   * Keycloak / MCP backend volumes need a clean slate (realm-export
-#     changes, token-lifespan edits, drifted state mid-demo).
-#   * The gateway's cached JWKS goes stale after a Keycloak restart
-#     and validation fails with "InvalidSignature".
-#   * You want a known-good state before walking through scenarios.
 #
-# What it does, in order:
-#   1. Kill any local policy gateway listening on :8090.
-#   2. docker compose down -v   (wipe Keycloak/MCP volumes).
-#   3. docker compose up -d     (fresh containers, realm re-imported).
-#   4. Wait for Keycloak's OIDC discovery to respond.
-#   5. Run verify-token-exchange.sh as a smoke check.
-#   6. Start the gateway in the background; tee its log into
-#      ./gateway.log; wait until :8090 is listening.
-#   7. Run scenarios/01-bob-allow.sh as an end-to-end smoke check.
+# Rebuild the gateway, reset demo containers and volumes, and run smoke tests.
+# Stops the gateway on :8090 and waits for Keycloak and Valkey before restarting.
 #
-# Usage (from this directory):
+# Usage:
 #   ./restart.sh
-#   REBUILD_IMAGES=1 ./restart.sh   # force-rebuild container images first
-#   WITH_SPIRE=1 ./restart.sh       # also bring up the SPIRE overlay (scenario 13)
+#   REBUILD_IMAGES=1 ./restart.sh  # rebuild container images
+#   WITH_SPIRE=1 ./restart.sh      # include workload identity (scenario 13)
 #
-# `docker compose up -d` builds any *missing* images (Keycloak + the CIBA
-# SPI, auth-channel, hr-mcp) but reuses existing ones. The gateway binary is
-# always rebuilt by build-gateway.sh, so Rust changes are picked up either
-# way; set REBUILD_IMAGES=1 after editing the SPI (keycloak/ciba-spi/),
-# auth-channel, or hr-mcp source so those images are rebuilt too.
-#
-# Logs:
-#   ./gateway.log   — gateway stdout/stderr, follow with `tail -F`. A symlink
-#                     into .gwlog/; see the GATEWAY_LOG note below for why.
+# Gateway output is written to gateway.log, a symlink into .gwlog/.
 
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
-# Which praxis config to run. Six configs cover the 2x3 matrix of IdP x PDP;
-# this defaults to Keycloak + OPA/Rego (praxis-opa.yaml):
-#
-#                   Cedar                    CEL                    OPA/Rego
-#   Keycloak        praxis.yaml              praxis-cel.yaml        praxis-opa.yaml
-#   IBM Verify      praxis-verify-cedar.yaml praxis-verify-cel.yaml praxis-verify-opa.yaml
-#
-# The *verify* configs also need USE_VERIFY=true so the scenario scripts mint
-# from the same IdP the gateway trusts — see praxis-verify-opa.yaml.
+# GATEWAY_CONFIG selects the IdP and PDP; default is Keycloak + OPA.
+# Verify configs also require USE_VERIFY=true so scenarios mint from Verify.
 GATEWAY_CONFIG="${GATEWAY_CONFIG:-praxis-opa.yaml}"
 
-# The Verify path's delegators read their client secret from the environment
-# (client_secret_source: {kind: env_var}) rather than from inline YAML, since
-# those are live tenant credentials. Source ./.env.verify when present so the
-# variable reaches the gateway process below. Gitignored; see
-# .env.verify.example.
+# Load Verify credentials for the gateway. See .env.verify.example.
 if [ -f .env.verify ]; then
   set -a
   # shellcheck disable=SC1091
   . ./.env.verify
   set +a
 fi
-# Optional SPIRE overlay for workload identity (scenario 13). WITH_SPIRE=1 adds
-# docker-compose.spire.yml to every compose call, which also turns on Keycloak's
-# SPIFFE feature, and configures the realm to trust SPIRE once Keycloak is up.
-# Without it the stack is exactly the base demo, and any SPIRE containers left
-# from an earlier run are removed by `down --remove-orphans`.
+# WITH_SPIRE=1 enables workload identity and the Keycloak SPIFFE provider.
 WITH_SPIRE="${WITH_SPIRE:-0}"
 COMPOSE=(docker compose)
 if [ "$WITH_SPIRE" = "1" ]; then
   COMPOSE+=(-f docker-compose.yml -f docker-compose.spire.yml)
 fi
-# The SPIRE agent and the workloads container sit under the `attestation`
-# profile, because the agent needs a join token that only exists once the
-# server is up (step 5b). Teardown names the profile so they go too.
+# Include the attestation profile on teardown. Its services need a join token
+# and start after the SPIRE server.
 DOWN=("${COMPOSE[@]}")
 if [ "$WITH_SPIRE" = "1" ]; then
   DOWN+=(--profile attestation)
 fi
-# The gateway's config watcher watches the *directory* holding the config, not
-# the config files themselves, and fires on any event in it. On Linux (raw
-# inotify) that means appending to a log file in this directory triggers a
-# reload, which logs, which triggers another — a runaway loop that rebuilds the
-# PolicyEngine ~1x/sec and drops in-memory elicitation state, so scenario 11's
-# CIBA id goes "unknown elicitation id" between polls. macOS/FSEvents coalesces
-# enough to hide it, which is why this only shows up on the remote VM.
-#
-# So the real log lives in a subdirectory and ./gateway.log is a symlink to it:
-# writes land outside the watched directory, while everything that reads
-# ./gateway.log (scenarios/_lib.sh audit assertions, `tail -F`) is unchanged.
+# Keep log writes outside the watched config directory. On Linux, writes there
+# trigger repeated reloads and discard pending approval state. gateway.log stays
+# a symlink for the scenario audit assertions.
 GATEWAY_LOG="gateway.log"
 GATEWAY_LOG_DIR=".gwlog"
 mkdir -p "$GATEWAY_LOG_DIR"
@@ -99,15 +54,10 @@ KEYCLOAK_REALM="${KEYCLOAK_REALM:-policy-demo}"
 KEYCLOAK_READY_URL="${KEYCLOAK_HOST}/realms/${KEYCLOAK_REALM}/.well-known/openid-configuration"
 KEYCLOAK_TIMEOUT="${KEYCLOAK_TIMEOUT:-90}"   # seconds
 
-# Force-rebuild container images (Keycloak+SPI, auth-channel, hr-mcp) before
-# starting. Off by default so `up -d` reuses cached images; set to 1 after
-# editing image source (e.g. keycloak/ciba-spi/).
+# Set REBUILD_IMAGES=1 after editing container source.
 REBUILD_IMAGES="${REBUILD_IMAGES:-0}"
 
-# Resolve (and build if needed) the policy gateway binary. Where
-# The gateway is built from ./gateway (composes praxis-ai + praxis's policy
-# filter) — see build-gateway.sh. Pre-set GATEWAY_BIN to skip the build, or
-# GATEWAY_PROFILE=debug for a faster build.
+# Build the gateway unless GATEWAY_BIN is set. GATEWAY_PROFILE=debug builds faster.
 GATEWAY_BIN="${GATEWAY_BIN:-$(./build-gateway.sh)}"
 if [ ! -x "$GATEWAY_BIN" ]; then
   echo "fatal: gateway binary not found at '$GATEWAY_BIN'." >&2
@@ -120,10 +70,7 @@ ok()   { printf "  \033[1;32m✓\033[0m %s\n" "$*"; }
 warn() { printf "  \033[1;33m⚠\033[0m %s\n" "$*"; }
 die()  { printf "  \033[1;31m✗\033[0m %s\n" "$*"; exit 1; }
 
-# Fail fast on a Verify run with no client secret. Without this the gateway
-# starts, identity resolution succeeds, and the first scenario dies at
-# delegation.idp_rejected — which reads like a policy problem rather than a
-# missing environment variable.
+# Require the exchange secret before starting a Verify configuration.
 case "$GATEWAY_CONFIG" in
   *verify*)
     if [ -z "${VERIFY_GATEWAY_CLIENT_SECRET:-}" ]; then
@@ -131,23 +78,13 @@ case "$GATEWAY_CONFIG" in
       echo "  cp .env.verify.example .env.verify   # then fill in the secret" >&2
       exit 1
     fi
-    # The policy-verify-*.yaml documents are generated from their .tmpl: the
-    # tenant URL and the exchange client_id are tenant-specific, and Verify
-    # GENERATES client ids, so a rebuilt tenant invalidates whatever was
-    # committed. Praxis has no env-var indirection for client_id (only for the
-    # secret), so substitution happens here, before the gateway reads the file.
-    # Rendering is idempotent and quiet when nothing changed.
-    #
-    # Render only the variant this config actually loads, so a CEL run does not
-    # fail on an unrelated broken template.
+    # Render the selected policy variant with the current tenant and client ids.
     case "$GATEWAY_CONFIG" in
       *verify-cel*)   VERIFY_VARIANT=cel ;;
       *verify-cedar*) VERIFY_VARIANT=cedar ;;
       *verify-opa*)   VERIFY_VARIANT=opa ;;
       *)
-        # A *verify* config with no recognised PDP suffix. Render everything
-        # rather than guess: the cost is two extra renders, and the alternative
-        # is starting the gateway against a stale file.
+        # Render all variants if the config name does not select one.
         VERIFY_VARIANT="" ;;
     esac
     step "rendering $GATEWAY_CONFIG's policy config from its template"
@@ -162,12 +99,8 @@ step "stopping any existing gateway on :8090"
 if pids=$(lsof -ti :8090 2>/dev/null); then
   # shellcheck disable=SC2086
   kill $pids 2>/dev/null || true
-  # Wait for the processes to actually exit, not just for the port to free.
-  # pingora shuts down gracefully, and a gateway that has released :8090 can
-  # still be running for several seconds. Starting the next one then means two
-  # processes writing to $GATEWAY_LOG at independent offsets, which silently
-  # loses lines from the new gateway and leaves the old one's shutdown messages
-  # at the end of a log that claims to be the new one's.
+  # Wait for process exit, not just port release, so old and new gateways
+  # do not write concurrently to the same log.
   still_alive() {
     local p
     for p in $pids; do kill -0 "$p" 2>/dev/null && return 0; done
@@ -216,10 +149,7 @@ done
 printf "\n"
 ok "Keycloak responding at $KEYCLOAK_READY_URL"
 
-# 4b. Wait for Valkey (the engine's session-store backend). The gateway connects
-# lazily on first request, so this is a fail-loud guard rather than a
-# hard dependency — a down Valkey would otherwise surface as a denied
-# request mid-scenario.
+# Wait for Valkey before the gateway opens its lazy session-store connection.
 step "waiting for Valkey (session store)"
 deadline=$(( $(date +%s) + 30 ))
 while [ "$(docker compose exec -T valkey valkey-cli ping 2>/dev/null | tr -d '\r')" != "PONG" ]; do

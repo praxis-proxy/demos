@@ -2,28 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Praxis Contributors
 #
-# Workload identity: the AGENT acts as itself, with no human user involved.
-# The agent runs as uid 1001 in the `workloads` container and fetches its
-# SPIFFE JWT-SVID from the Workload API; SPIRE attests the process and issues
-# the SVID registered for it. The agent presents only that SVID
-# (X-Workload-Token) to
-# get_headcount, a route that authenticates by the SVID alone (route-level
-# `authentication: replace_inherited`). The gateway:
-#
-#   1. resolves caller_workload from the SVID alone; no user or client token
-#      is needed,
-#   2. runs `delegate(..., subject: caller_workload)`: leg 1 presents the SVID
-#      as an RFC 7523 client assertion (type ...:jwt-spiffe) to authenticate as
-#      the hr-copilot-agent client, and leg 2 exchanges that token for a
-#      workday-api-scoped credential,
-#   3. attaches the minted workday-api token to the upstream call, and strips
-#      a stray X-User-Token and a spoofed X-Auth-User-Id the call also carries.
-#
-# Scenarios 01-12 carry a person's X-User-Token and the client's Authorization;
-# this one carries neither. The agent's own workload identity is the whole story.
-#
-# Needs the SPIRE overlay, which `WITH_SPIRE=1 ./restart.sh` brings up and
-# configures. Without it this scenario reports itself skipped (exit 77).
+# Authenticate get_headcount with a SPIFFE JWT-SVID from uid 1001 in workloads.
+# The gateway exchanges it for a workday-api token and strips stray user headers.
+# Requires WITH_SPIRE=1 ./restart.sh; otherwise skips with exit 77.
 
 set -euo pipefail
 source "$(dirname "$0")/_lib.sh"
@@ -74,8 +55,7 @@ expect_upstream_no_header x-user-token
 expect_upstream_no_header x-auth-user-id
 
 step "An unregistered process in the same container gets no SVID"
-# uid 1004 has no registration entry, so the agent attests it and refuses.
-# Nothing it could present exists to be stolen or replayed.
+# uid 1004 has no registration entry and cannot obtain an SVID.
 if SVID_WAIT=0 "$DEMO_DIR/spire/fetch-svid.sh" 1004 "$REALM_ISSUER" >/dev/null 2>&1; then
   fail_ "SPIRE issued an SVID to unregistered uid 1004"
 else

@@ -2,15 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Praxis Contributors
 #
-# Fetch a JWT-SVID the way a workload does: from the SPIFFE Workload API, as a
-# process running under the given uid in the `workloads` container. SPIRE
-# attests the calling process and issues the SVID of the registration entry it
-# matches, or none at all.
-#
-#   ./spire/fetch-svid.sh UID AUDIENCE     prints the JWT-SVID, or exits 1
-#
-# A new registration entry takes a few seconds to reach the agent, so a
-# refusal is retried for up to SVID_WAIT seconds (default 20; 0 to try once).
+# Fetch a JWT-SVID from the Workload API as the given uid in workloads.
+# Usage: ./spire/fetch-svid.sh UID AUDIENCE
+# Retry for SVID_WAIT seconds (default 20) while registration propagates; 0 tries once.
 set -euo pipefail
 
 uid="$1" audience="$2"
@@ -23,10 +17,7 @@ trap 'rm -f "$errors"' EXIT
 
 deadline=$(( $(date +%s) + wait_s ))
 while :; do
-  # Parse stdout only. A compose wrapper can write to stderr, and `podman
-  # compose` does: a banner wrapped in terminal colour codes, whose reset code
-  # lands at the start of the next line. Merged into stdout, that line no
-  # longer starts with "token(" and a fetch that succeeded reads as a failure.
+  # Parse stdout only; compose wrappers may write banners or color codes to stderr.
   out=$("${COMPOSE[@]}" exec -T -u "$uid" workloads spire-agent api fetch jwt \
           -audience "$audience" -socketPath /opt/spire/sockets/agent.sock 2>"$errors") || true
   # Output is "token(<spiffe id>):" followed by the JWT on the next line.

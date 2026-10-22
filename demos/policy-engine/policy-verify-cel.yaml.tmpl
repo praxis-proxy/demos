@@ -1,83 +1,9 @@
-# TEMPLATE — this file is the source; policy-verify-cel.yaml is GENERATED from it.
-#
-# Edit THIS file, never the generated one. restart.sh renders it on every Verify
-# run (see render-verify-config.sh), so edits to policy-verify-cel.yaml are
-# silently overwritten and the generated file is gitignored.
-#
-#   ./render-verify-config.sh cel        # render once, by hand
-#   GATEWAY_CONFIG=praxis-verify-cel.yaml ./restart.sh   # renders automatically
-#
-# Two placeholders are substituted, both from the environment (restart.sh sources
-# ./.env.verify first). Neither is a secret — the client SECRET is not templated;
-# it stays a runtime `client_secret_source: {kind: env_var}` lookup by the gateway
-# so it never lands in a rendered file on disk.
-#
-#   ${VERIFY_TENANT_URL}          e.g. https://praxis-1.verify.ibm.com
-#                                 defaults to the tenant in post_deploy_variables.json
-#   ${VERIFY_GATEWAY_CLIENT_ID}   the EXCHANGE client's id (praxis-sts-1)
-#                                 defaults to GATEWAY_CLIENT_ID in that same file
-#
-# Both defaults mean a normal run needs no extra setup: the ids that
-# verify/import-verify-clients.sh writes into post_deploy_variables.json are
-# picked up automatically. Export either variable to override.
-#
-# ---------------------------------------------------------------------------
-# Policy engine config for the HR demo — IBM VERIFY + CEL variant.
-#
-# This file sits at the intersection of the demo's two axes, and it is the only
-# thing in it that is new:
-#
-#   IdP axis  — IBM Verify instead of Keycloak. Diff this against
-#               policy-cel.yaml and every difference is in the identity and
-#               delegation blocks.
-#   PDP axis  — CEL instead of OPA/Rego. Diff this against
-#               policy-verify-opa.yaml.tmpl and every difference is in the
-#               `pdp:` block and the one `cel:` step on search_repos.
-#
-# Both diffs are small, and that is the argument: the policy layer does not care
-# which IdP mints the token, and the IdP does not care which PDP decides. Six
-# configs cover the 2x3 matrix (Keycloak|Verify x Cedar|CEL|OPA).
-#
-# Run with (BOTH switches — see praxis-verify-cel.yaml for why):
-#   USE_VERIFY=true GATEWAY_CONFIG=praxis-verify-cel.yaml ./restart.sh
-#
-# Hot path:
-#   1. jwt-user      validates X-User-Token against Verify (the tenant below)
-#                    → security.subject + raw_credentials.inbound_tokens[User]
-#   2. jwt-client    validates Authorization against Verify (same tenant)
-#                    → security.client
-#   3. APL gate      require(role.hr) on the get_compensation tool
-#   4. APL delegate  workday-oauth exchanges the user's IdP token for an
-#                    audience=workday-api token via Verify (RFC 8693)
-#   5. APL args      ssn arg gets redacted unless caller has perm.view_ssn
-#
-# Verify is public HTTPS at ${VERIFY_TENANT_URL}/oauth2, so no
-# insecure_http / loopback opt-in is needed on the IdP side. Access tokens are
-# RS256 `at+jwt` (kid: server); we point at the tenant JWKS so the resolver
-# fetches the active public key at init time.
-#
-# Two known deltas from the Keycloak path, both properties of the tenant rather
-# than of the gateway or the policy. Neither changes a scenario outcome, both
-# change what can honestly be narrated:
-#
-#   V1 — `aud` is client-bound, not request-scoped. Every minted token carries
-#        the exchanging client's full registered resource list regardless of the
-#        requested `audience`, and an unregistered audience is accepted
-#        silently. Say "exchanged token," not "audience-scoped token."
-#   V2 — layer 4 is an echo, not an entitlement check. See github-oauth below.
-#
-# Verify emits roles/teams/permissions as SCALARS at N=1, and the standard claim
-# mapper reads them via Value::as_array, which returns None for a JSON string —
-# yielding an empty subject.roles with no error, which then presents as a policy
-# deny rather than a config fault. This used to be worked around on the tenant, by
-# padding each claim with a trailing empty string so the value was always an
-# array, at the cost of "" becoming a real set member in audit records and
-# X-Policy-* debug output.
-#
-# `claim_mapper: ibmverify` below is the fix: the preset wraps a scalar into a
-# one-element vec, so the tenant's claims are unpadded now. The two settings go
-# together — an unpadded tenant read WITHOUT the preset silently empties
-# subject.roles for every single-valued persona.
+# IBM Verify + CEL policy.
+# Edit this template; restart.sh renders policy-verify-cel.yaml.
+# Run: USE_VERIFY=true GATEWAY_CONFIG=praxis-verify-cel.yaml ./restart.sh
+# Tenant and client ids come from post_deploy_variables.json or VERIFY_* overrides.
+# Secrets are read from the environment at runtime.
+# Use claim_mapper: ibmverify to normalize scalar role and permission claims.
 
 engine_settings:
   dispatch: policy
@@ -86,8 +12,7 @@ plugins:
   # User identity. Carries the human's roles + permissions claims.
   - name: jwt-user
     capabilities:
-      # PPE performs no outbound HTTP of its own, so a plugin that reaches an
-      # IdP declares this or the engine refuses to start.
+      # Required for outbound IdP requests.
       - perform_http
     kind: identity/jwt
     hooks: [identity.resolve]
@@ -96,21 +21,8 @@ plugins:
     config:
       role: user
       header: X-User-Token
-      # Verify FIRST, Keycloak second — and the second entry is a WORKAROUND,
-      # not the design. The intent is Verify only: this config's job is to prove
-      # the policy layer works against Verify, and trusting both lets a
-      # Keycloak-minted token satisfy the demo without anyone noticing which IdP
-      # actually validated it. So when demoing the Verify path, confirm the
-      # issuer in the audit record rather than inferring it from a 200.
-      #
-      # The Keycloak entry is here because the agent/ chat client and the
-      # auth-channel still mint from Keycloak on some paths (added in c596244).
-      # Drop it once those move to Verify, and this file becomes what its header
-      # claims. Both halves of the demo work either way.
-      #
-      # `audiences` is the friendly name rather than the client UUID because
-      # Verify stamps its full registered resource list on every token (delta
-      # V1) and praxis-gateway is in it — verified on the live tenant.
+      # Keycloak remains trusted for the chat client and approval flow.
+      # Verify uses the registered resource name praxis-gateway as its audience.
       trusted_issuers:
         - issuer: "${VERIFY_TENANT_URL}/oauth2"
           audiences: ["praxis-gateway"]
@@ -132,8 +44,7 @@ plugins:
   # Client identity. Carries the agent's client_id / azp.
   - name: jwt-client
     capabilities:
-      # PPE performs no outbound HTTP of its own, so a plugin that reaches an
-      # IdP declares this or the engine refuses to start.
+      # Required for outbound IdP requests.
       - perform_http
     kind: identity/jwt
     hooks: [identity.resolve]
@@ -161,23 +72,8 @@ plugins:
           leeway_seconds: 60
       claim_mapper: ibmverify
 
-  # Scenario 14: the AGENT's own identity. A governed IBM Verify Agent Identity
-  # mints with client_credentials and acts as itself — no human, no user token.
-  #
-  # role: subject, not a bespoke "agent" role. There is no agent identity slot
-  # in the engine (the slots are subject / client / caller_workload /
-  # this_workload), and on this route the agent IS the subject: there is nobody
-  # else. `read_agent`/AgentExtension is NOT an identity — it carries session
-  # and conversation state.
-  #
-  # The token is a true JWT because the agent's client is an application-level
-  # OIDC client with accessTokenType: jwt. A Dynamic Client Registration client
-  # mints an opaque token this resolver could not validate — see delta A1 in
-  # docs/brainstorms/2026-10-20-verify-agent-identity-requirements.md.
-  #
-  # It carries NO roles/teams/permissions: attribute mappers read user
-  # attributes and a client_credentials grant has no user (finding E3). Its
-  # authority is the `scope` it requests, which the agent route gates on.
+  # Scenario 14 authenticates an agent with its client-credentials JWT.
+  # It carries no user roles or teams.
   - name: jwt-agent
     capabilities:
       - perform_http
@@ -186,14 +82,7 @@ plugins:
     mode: sequential
     on_error: fail
     config:
-      # `user` is the role name the engine accepts (user | client | workload);
-      # it writes security.subject, which is the slot the agent-status plugin
-      # reads. There is no "agent" or "subject" role — the engine rejects
-      # anything else as role: Custom(...), which is not supported.
-      #
-      # The agent IS the subject on this route: there is no human. Naming it
-      # `user` is a vocabulary artifact of the engine, not a claim that a person
-      # is involved.
+      # role: user stores the agent as security.subject for this route.
       role: user
       header: X-Agent-Token
       trusted_issuers:
@@ -206,26 +95,11 @@ plugins:
             kind: jwks_url
             url: "${VERIFY_TENANT_URL}/oauth2/jwks"
           leeway_seconds: 60
-      # `standard`, not `ibmverify`: the preset exists to wrap scalar
-      # roles/teams/permissions into sets, and this token carries none of them.
-      # Nothing to normalise, so nothing to gain.
+      # This token has no user role or permission claims to normalize.
       claim_mapper: standard
 
-  # Scenario 14: refuses the call when the agent is not ACTIVE in the IBM Verify
-  # Agent Registry.
-  #
-  # This is the demo's kill switch, and the half SPIFFE does not have: an admin
-  # suspends a named agent in a console and the next call fails.
-  #
-  # It has to live here rather than at the IdP because Verify does NOT enforce
-  # status at the token endpoint — a SUSPENDED agent still mints tokens, and
-  # tokens minted before the suspend stay valid (finding E1, measured). That is
-  # also IBM's own architecture: the vault cookbook's Use Case C has the token
-  # exchange succeed while the RESOURCE denies. Praxis is the resource here.
-  #
-  # cache_ttl_seconds IS the revocation window: a suspended agent keeps working
-  # until its entry expires. Stated rather than hidden, because it is the fair
-  # comparison against an SVID's TTL.
+  # Scenario 14 checks agent status in the registry. Verify can still issue
+  # tokens after suspension; the cache TTL bounds enforcement delay.
   - name: agent-status
     kind: validator/agent-status
     hooks: [cmf.tool_pre_invoke]
@@ -237,79 +111,42 @@ plugins:
       - read_claims       # ... and its claims, where an agent id may appear
     config:
       registry_url: "${VERIFY_TENANT_URL}/v1.0/Agents"
-      # Which agent record to check. A Verify client_credentials token carries
-      # sub/client_id (the OAuth client) but no claim naming its Agent Registry
-      # record, and the association is write-only registry-side, so it cannot
-      # be resolved by lookup either. verify/import-verify-clients.sh writes
-      # this id into post_deploy_variables.json.
+      # Registry id written by verify/import-verify-clients.sh.
+      # The token does not carry this id.
       agent_id: "${VERIFY_AGENT_ID}"
-      # A dedicated API client holding exactly ONE entitlement, readAgents.
-      # NOT the admin client: that one carries ~40 entitlements including
-      # writeAgents and agentOwner, so a gateway compromise could rewrite the
-      # records that govern it — including silently re-enabling a suspended
-      # agent. With readAgents alone the gateway can read an agent record and
-      # nothing else (PUT /v1.0/Agents, POST /v2.0/Users and
-      # GET /v1.0/applications are all 403; verified on praxis-2).
-      #
-      # verify/import-verify-clients.sh creates it and appends its credentials
-      # to .env.verify. The admin pair stays provisioning-only.
+      # Use the readAgents client provisioned in .env.verify.
+      # Status changes use a separate manageAgentStatus credential.
       admin_client_id: "${VERIFY_AGENT_READER_CLIENT_ID}"
-      # A NAME, not the secret: this file is generated onto disk, and a live
-      # tenant credential must not land in it. restart.sh sources .env.verify.
+      # Read the secret from the environment populated by .env.verify.
       admin_client_secret_env: VERIFY_AGENT_READER_CLIENT_SECRET
       cache_ttl_seconds: 5
-      # An unreachable registry denies. A kill switch that fails open is not a
-      # kill switch; the cost is that the agent route needs the tenant up.
+      # Deny if the registry cannot be reached.
       on_unavailable: deny
 
-  # RFC 8693 token-exchange delegator. Trades the user's hr-copilot
-  # token for a workday-api-audience-scoped access token.
-  #
-  # Pattern 1 (workday flow): the user already carries view_ssn etc.
-  # as a Verify user attribute → claim. The exchange just changes
-  # the audience; the perms come along for the ride.
+  # Exchange the user token for Workday access; retain the user permissions.
   - name: workday-oauth
     kind: delegator/oauth
     hooks: [token.delegate]
     mode: sequential
     on_error: fail
     capabilities:
-      # PPE performs no outbound HTTP of its own, so a plugin that reaches an
-      # IdP declares this or the engine refuses to start.
+      # Required for outbound IdP requests.
       - perform_http
       - read_inbound_credentials
       - write_delegated_tokens
     config:
       token_endpoint: "${VERIFY_TENANT_URL}/oauth2/token"
-      # No insecure_http: Verify is public HTTPS.
-      #
-      # This is the EXCHANGE client, deliberately different from the client
-      # mint-verify-token.sh uses to mint (HR_COPILOT_CLIENT_ID in
-      # post_deploy_variables.json). Verify refuses to let a
-      # client exchange tokens it issued itself:
-      #   CSIAQ5207E Clients are not allowed to perform a token exchange on
-      #              their own tokens.
-      # Same split as the Keycloak realm's hr-copilot mints / praxis-gateway
-      # exchanges. Point both at one client and every scenario fails at
-      # delegation, not at identity.
+      # Use the exchange client; Verify rejects exchanging tokens issued by the
+      # same client (CSIAQ5207E).
       client_id: "${VERIFY_GATEWAY_CLIENT_ID}"
-      # Live tenant secret, so it is read from the environment rather than
-      # tracked in git. restart.sh sources ./.env.verify when present; see
-      # .env.verify.example. (`kind: literal` with an inline `secret:` is what
-      # the Keycloak configs use — safe only because those credentials are
-      # throwaway localhost ones.)
+      # restart.sh loads this secret from .env.verify.
       client_secret_source:
         kind: env_var
         name: VERIFY_GATEWAY_CLIENT_SECRET
       timeout_seconds: 5
       default_outbound_header: "Authorization"
 
-  # ----------------------------------------------------------------
-  # Field-level validator: PII scanner.
-  # ----------------------------------------------------------------
-  # Walks tool/prompt arguments looking for SSN / credit-card / email
-  # patterns. If found in `deny` mode, refuses the request. Wired on
-  # `cmf.tool_pre_invoke` so it fires before every tool call.
+  # Scan tool arguments for PII before invocation.
   - name: pii-scan
     kind: validator/pii-scan
     hooks: [cmf.tool_pre_invoke]
@@ -321,26 +158,13 @@ plugins:
         - { kind: credit_card }
       mode: deny
 
-  # ----------------------------------------------------------------
-  # Observation: structured audit logger.
-  # ----------------------------------------------------------------
-  # Emits one JSON line per dispatched request capturing subject,
-  # client, entity, tool args, and any delegation outcomes. Never
-  # blocks — observation only.
-  #
-  # One hook, because this demo declares only `tool:` routes. Under
-  # `dispatch: policy` a plugin runs where a `run(name)` step names it, so
-  # declaring the prompt and resource hooks too would leave two of the three
-  # uncovered and the load would say so. Add them back alongside the routes
-  # that need them.
+  # Emit JSON audit records for tool calls.
   - name: audit-log
     kind: audit/logger
     hooks:
       - cmf.tool_pre_invoke
     mode: sequential
-    # Ordering is the order the document writes the steps: a `run(name)`
-    # step invokes the one plugin it names, so this records the final
-    # decision and the minted tokens by sitting last.
+    # Run last to record the decision and delegated tokens.
     on_error: ignore  # observation failures don't halt traffic
     capabilities:
       - read_subject
@@ -351,34 +175,22 @@ plugins:
       destination: stderr
       source: policy-demo-gateway
 
-  # Second delegator — same plugin kind, different audience.
-  #
-  # Pattern 3 (github flow). On Keycloak the github-api client has a
-  # per-audience claim mapper (`gh-permissions-as-scope`) that derives the
-  # minted token's `permissions` from the user's own gh_permissions attribute,
-  # so the IdP is the source of system-specific perm truth and can refuse
-  # authority the user lacks.
-  #
-  # Verify does NOT do that — it echoes whatever `scope` was requested (delta
-  # V2). Scenario 4's layer-4 assertion still passes, but it verifies wire-shape
-  # parity rather than an authorization decision. Narrate it as "the gateway
-  # asserts the minted token carries the authority the route requires" and do
-  # not claim the IdP refused anything on this path.
+  # Verify echoes the requested scope. The permissions assertion below checks
+  # the exchanged token; it does not prove an IdP entitlement decision.
   - name: github-oauth
     kind: delegator/oauth
     hooks: [token.delegate]
     mode: sequential
     on_error: fail
     capabilities:
-      # PPE performs no outbound HTTP of its own, so a plugin that reaches an
-      # IdP declares this or the engine refuses to start.
+      # Required for outbound IdP requests.
       - perform_http
       - read_inbound_credentials
       - write_delegated_tokens
     config:
       token_endpoint: "${VERIFY_TENANT_URL}/oauth2/token"
-      # No insecure_http: Verify is public HTTPS.
-      # The exchange client again — see the note on workday-oauth above.
+      # Use the exchange client; Verify rejects exchanging tokens issued by the
+      # same client (CSIAQ5207E).
       client_id: "${VERIFY_GATEWAY_CLIENT_ID}"
       client_secret_source:
         kind: env_var
@@ -386,50 +198,18 @@ plugins:
       timeout_seconds: 5
       default_outbound_header: "Authorization"
 
-  # ----------------------------------------------------------------
-  # Human-in-the-loop: CIBA manager approval.
-  # ----------------------------------------------------------------
-  # Drives an out-of-band approval through OIDC CIBA: the gateway POSTs
-  # a backchannel auth request to Keycloak (login_hint = the approver),
-  # Keycloak pushes a decoupled prompt to the approver's device (the
-  # demo's web approval UI), and the gateway polls until it resolves.
-  # While pending, the gateway emits JSON-RPC -32120 so the agent can
-  # tell the user "awaiting sign-off" and retry — it never blocks.
-  # Registered under the name `manager-approver`; the route names it.
+  # Request manager approval through Keycloak CIBA. Pending calls return -32120.
   - name: manager-approver
     capabilities:
-      # PPE performs no outbound HTTP of its own, so a plugin that reaches an
-      # IdP declares this or the engine refuses to start.
+      # Required for outbound IdP requests.
       - perform_http
     kind: elicitation/ciba
     hooks: [elicit]
     mode: sequential
     on_error: fail
     config:
-      # STILL KEYCLOAK, deliberately — and both endpoints stay paired, because
-      # retargeting only the token endpoint would poll Verify for an
-      # auth_req_id that Keycloak issued.
-      #
-      # Verify advertises the CIBA grant in its discovery document
-      # (/oauth2/ciba, poll delivery), but two things block it on this tenant
-      # today. Both were tested on 2026-09-15, not assumed:
-      #
-      #   1. Neither tenant client may use the grant. Both the minting client
-      #      (4bde48ec-…) and the exchange client (c619871a-…) return:
-      #        CSIAQ5303E The OAuth 2.0 Client is not allowed to use
-      #                   authorization grant "urn:openid:params:grant-type:ciba"
-      #      Fix is tenant-side: enable the CIBA grant on the client.
-      #
-      #   2. No `manager` claim exists on a Verify token, and
-      #      require_approval(from: claim.manager) on the adjust_compensation
-      #      route needs one. Bob's token carries preferred_username/roles/
-      #      teams/permissions/gh_permissions and no manager attribute. Fix is
-      #      also tenant-side: add the attribute and map it into the token.
-      #
-      # Consequence: scenarios 10-11 must run on the Keycloak path. Scenario 10
-      # (under-threshold) never reaches this plugin and so is fine either way;
-      # scenario 11 is the one that needs Keycloak. walkthrough.sh runs
-      # scenarios 1-7 and touches neither.
+      # CIBA still uses Keycloak. Keep both endpoints on the same IdP, and run
+      # scenario 11 with a Keycloak configuration.
       backchannel_endpoint: "http://localhost:8081/realms/policy-demo/protocol/openid-connect/ext/ciba/auth"
       token_endpoint: "http://localhost:8081/realms/policy-demo/protocol/openid-connect/token"
       insecure_http: true   # localhost dev — never production
@@ -446,27 +226,12 @@ global:
     - jwt-user
     - jwt-client
 
-  # ----------------------------------------------------------------
-  # Assertions — what the engine puts on the wire.
-  # ----------------------------------------------------------------
-  # Everything above this block decides. This is the only thing that tells the
-  # upstream what was decided, as request headers it can read.
-  #
-  # The trust model first, because it is the whole story: what crosses here is
-  # UNSIGNED. hr-mcp believes `x-auth-user-id` because it believes nothing
-  # between this gateway and itself can set that header. If that is not true of
-  # your network, this feature is not what makes it true.
-  #
-  # Sources are engine-derived only. A raw inbound token and the client's own
-  # request headers are refused as sources, in code, with no config surface to
-  # widen: rendering a client-supplied header into one the upstream trusts is
-  # the laundering this exists to prevent. Scenario 12 demonstrates that.
+  # Assert engine-derived identity in upstream headers (scenario 12).
+  # These headers are unsigned; the backend must trust its connection to the gateway.
   assertions:
     request:
       headers:
-        # The stable subject identifier the JWT resolved to (`sub`).
-        # `on_missing: deny` because every route here authenticates, so an
-        # absent subject is a bug rather than an anonymous request to pass on.
+        # Require the resolved subject id.
         - name: x-auth-user-id
           from: subject.id
           on_missing: deny
@@ -475,9 +240,7 @@ global:
         - name: x-auth-username
           from: claim.preferred_username
 
-        # A collection MUST declare an encoding: a set reaching an upstream in
-        # a shape nobody chose is a shape nobody can rely on. Rendered sorted,
-        # so one identity produces identical header bytes every request.
+        # Encode the sorted collection explicitly for stable header values.
         - name: x-auth-roles
           from: subject.roles
           encode: csv
@@ -489,115 +252,28 @@ global:
             manager: claim.manager
             teams: subject.teams
 
-      # `strip:` removes names no entry above targets. The user's raw JWT is
-      # one: `delegate(...)` already replaces `authorization` with the minted
-      # workday-api token, and this withholds the second copy, so the upstream
-      # ends up holding no credential the user issued.
-      #
-      # `authorization` is deliberately absent from the request protocol floor
-      # precisely so this is expressible. A floor header (`host`,
-      # `content-type`, `content-length`, `transfer-encoding`) fails the load
-      # rather than breaking traffic.
+      # Strip the original user token. Delegation replaces Authorization with
+      # the exchanged token. Protocol headers such as Host cannot be stripped.
       strip:
         - x-user-token
 
 
-  # ----------------------------------------------------------------
-  # CEL PDP — inline boolean predicates as the decision backend.
-  # APL routes call into CEL via `cel:` steps; the expression
-  # evaluates against the common attribute vocabulary (subject.*,
-  # role.*, args.*, delegation.*, session.*) and returns a boolean:
-  # true → allow, false (or any eval error) → fail-closed deny.
-  #
-  # That vocabulary is IdP-independent. By the time a `cel:` step runs,
-  # `role.engineer` is just a key in the attribute bag — it carries no
-  # trace of whether Verify or Keycloak minted the token it came from,
-  # which is why this block is byte-identical to the one in
-  # policy-cel.yaml.
-  #
-  # Choosing between the three: reach for CEL when the decision is a
-  # self-contained boolean predicate authored inline in the route — no
-  # external policy store, zero glue. Reach for Cedar when policy lives
-  # outside the route (versioned/signed policy sets) or needs the full
-  # entity/relationship model. Reach for OPA when you already have Rego,
-  # or want rules that compose and can be unit-tested with the OPA
-  # tooling your org already runs. All three express the SAME decision
-  # here on purpose — see policy-verify-cedar.yaml.tmpl and
-  # policy-verify-opa.yaml.tmpl.
-  #
-  # `pdp:` is a `global:` key, and the only scope that accepts one: a PDP, the
-  # session store and the static attribute tree are all process-global.
-  # ----------------------------------------------------------------
+  # Evaluate cel: predicates against the shared policy attributes.
+  # Only true permits the request; false, missing attributes, and errors deny.
   pdp:
     - kind: cel
       on_error: deny   # fail-closed; the default, spelled out
 
-  # ----------------------------------------------------------------
-  # Session store — where the engine persists taint labels.
-  # ----------------------------------------------------------------
-  # `taint(secret, session)` on get_compensation writes a `secret`
-  # label keyed by H(subject : X-Session-Id); send_email reads it back
-  # via `security.labels contains "secret"`. With this Valkey backend
-  # the label survives a gateway restart and can be shared across
-  # gateway instances (the default is an in-process store that resets
-  # on restart). Valkey runs as the `valkey` compose service; the
-  # gateway reaches it on localhost:6379. See scenarios 08 / 09.
-  #
-  # A `global:` key, like `pdp:` above and for the same reason.
-  #
-  # Optional keys (read by the valkey factory):
-  #   key_prefix: "taint:v1"   # default key namespace
-  #   tls: true                # required for non-localhost endpoints
-  #   username: / password:    # Valkey 6+ ACL auth (pair them)
-  #   ttl_seconds: 86400       # sliding label expiry (default: none)
-  #   connect_timeout_ms / command_timeout_ms  # defaults 250 / 500
+  # Persist session taint in Valkey across gateway restarts (scenarios 08/09).
+  # Labels are keyed by subject and session id.
   session_store:
     kind: valkey
     endpoint: localhost:6379
 
 routes:
 
-  # ----------------------------------------------------------------
-  # get_compensation
-  # ----------------------------------------------------------------
-  # Scenarios: 01 (Bob allow), 02 (Alice deny), 03 (Eve redact),
-  #            08 (Bob taint → send_email deny), 09 (cross-principal isolation)
-  #
-  # What the policy does:
-  #   1. require(role.hr)          — only HR-role callers proceed; anyone
-  #                                  else (e.g. Alice/engineer) gets -32001
-  #                                  before any IdP call is made.
-  #   2. delegate(workday-oauth)   — exchanges the user's JWT for a
-  #                                  workday-api token via Verify (RFC 8693).
-  #                                  The Authorization header that reaches
-  #                                  the upstream MCP server is the MINTED
-  #                                  token, not the user's original JWT.
-  #                                  Per delta V1 the minted `aud` is the
-  #                                  exchange client's whole resource list,
-  #                                  so narrate "exchanged", not "scoped".
-  #   3. taint(secret, session)    — marks this session as having touched
-  #                                  secret data. The label persists in the
-  #                                  Valkey session store keyed by
-  #                                  H(subject:session_id), so a later
-  #                                  send_email in the same session is denied
-  #                                  even if the email body is clean (scenario 08).
-  #   4. run(audit-log)            — emits a structured JSON record before
-  #                                  the call reaches upstream.
-  #   5. args.ssn / result.ssn     — field-level redaction on both the request
-  #                                  body (what upstream sees) and the response
-  #                                  body (what the client sees). Callers with
-  #                                  perm.view_ssn receive the real value;
-  #                                  everyone else gets "[REDACTED]".
-  #
-  # Expected outcomes:
-  #   Bob   (role.hr, perm.view_ssn)  → 200 OK; upstream gets minted workday
-  #                                      token; SSN intact in both directions
-  #   Alice (role.engineer, no hr)    → -32001, violation=pre_invocation[0]
-  #                                      (require(role.hr)); no token exchange
-  #   Eve   (role.hr, no view_ssn)    → 200 OK; upstream sees args.ssn=
-  #                                      "[REDACTED]"; client sees result.ssn=
-  #                                      "[REDACTED]"
-  # ----------------------------------------------------------------
+  # Compensation access and SSN redaction: scenarios 01-03.
+  # Reading compensation taints the session: scenarios 08/09.
   - tool: get_compensation
     authorization:
       pre_invocation:
@@ -610,62 +286,8 @@ routes:
     result:
       ssn: "str | redact(!perm.view_ssn)"
 
-  # ----------------------------------------------------------------
-  # search_repos
-  # ----------------------------------------------------------------
-  # Scenarios: 04 (Alice internal allow), 05 (Alice external deny),
-  #            06 (Bob APL deny)
-  #
-  # This is the ONLY route that differs between the three PDP variants.
-  #
-  # What the policy does (four-layer gauntlet):
-  #   1. require(team.engineering | team.security)
-  #                              — APL coarse gate. Bob (team.hr) is
-  #                                rejected here immediately; PDP is
-  #                                never invoked and no IdP round-trip
-  #                                occurs (scenario 06, -32001).
-  #   2. cel: expr               — CEL fine-grained PDP (same decision
-  #                                expressed in Cedar in
-  #                                policy-verify-cedar.yaml.tmpl and in
-  #                                OPA/Rego in policy-verify-opa.yaml.tmpl).
-  #                                A single boolean expression evaluated
-  #                                inline against the common attribute
-  #                                vocabulary:
-  #                                  • engineer && visibility=internal → true
-  #                                  • security (any visibility)       → true
-  #                                  • anything else                   → false
-  #                                CEL uses has() guards to avoid
-  #                                undefined-key errors on callers who
-  #                                lack the role entirely. false →
-  #                                violation=cel.policy_denied (scenario 05).
-  #   3. delegate(github-oauth)  — exchanges the user's JWT for a
-  #                                github-api token via Verify.
-  #   4. permissions check       — asserts the minted token actually
-  #                                carries repo:read:internal.
-  #
-  #                                On the KEYCLOAK path this is a real
-  #                                entitlement check: the realm's
-  #                                gh-permissions-as-scope mapper derives
-  #                                the minted token's `permissions` from the
-  #                                user's own gh_permissions attribute, so
-  #                                the IdP can refuse authority the user
-  #                                lacks. Verify does NOT do that — it echoes
-  #                                the requested scope back (delta V2). The
-  #                                assertion still passes, but it verifies
-  #                                wire-shape parity rather than an
-  #                                authorization decision. Do not claim the
-  #                                IdP refused anything on this path.
-  #
-  # Expected outcomes:
-  #   Alice (engineer, visibility=internal)  → 200 OK; upstream gets minted
-  #                                             github-api token with
-  #                                             permissions=[repo:read:internal]
-  #   Alice (engineer, visibility=external)  → -32001, violation=cel.policy_denied;
-  #                                             no token exchange; GitHub never sees
-  #                                             the request (scenario 05)
-  #   Bob   (hr, any visibility)             → -32001, violation=pre_invocation[0]
-  #                                             (APL gate); PDP not reached (scenario 06)
-  # ----------------------------------------------------------------
+  # Repository access: scenarios 04-06. Check the team, consult the PDP,
+  # exchange the token, then check its permissions.
   - tool: search_repos
     authorization:
       pre_invocation:
@@ -679,42 +301,14 @@ routes:
         - "delegate(github-oauth, target: github-api, audience: github-api, permissions: [repo:read:internal])"
         - "!(delegation.granted.permissions contains 'repo:read:internal'): deny"
         - "run(audit-log)"
-  # Scenario 14: the agent calls search_repos on its OWN authority.
-  #
-  # replace_inherited drops the global jwt-user / jwt-client resolvers, so this
-  # route authenticates by the agent's token alone — no X-User-Token, no
-  # Authorization. Scenario 13's get_headcount route does the same thing for a
-  # SPIFFE SVID; this is the Verify Agent Identity counterpart.
-  #
-  # run(agent-status) is FIRST so a suspended agent is refused before anything
-  # else runs. It is an authorization effect rather than an authentication step
-  # because a deny raised during authentication becomes HTTP 401 with a plain
-  # text body, while the scenario harness asserts the violation in both the
-  # X-Policy-Violation header and the JSON-RPC error body — only an
-  # authorization-phase deny produces that envelope. Measured both ways.
-  #
-  # There is deliberately NO team gate here. The agent holds no teams claim
-  # (a client_credentials token cannot carry one — finding E3) and should not
-  # borrow a human's. Its authority is the route itself plus its ACTIVE status:
-  # this tool exists for the agent, and agent-status decides whether the agent
-  # may act at all.
-  #
-  # Gating on the token's `scope` was the original intent and is not currently
-  # expressible: APL's attribute namespaces are role. / perm. / team. / claim. /
-  # args. / client. / caller_workload. / delegation. (ppe-apl-cmf
-  # constants.rs:85-139) — there is no scope. namespace, and `scope` does not
-  # reach claim.* either. The agent still REQUESTS
-  # scope=repo:read:internal, which bounds what the exchanged credential can
-  # carry; the gateway just cannot assert on it yet.
+  # Scenario 14 authenticates with X-Agent-Token only. Check registry status
+  # before delegation. This token has no team claim, and APL cannot assert its scope.
   - tool: search_repos_agent
     authentication:
       replace_inherited: true
       steps:
         - jwt-agent
-    # The global assertions describe a person (x-auth-user-id from subject.id),
-    # which would here name the agent's client id. Replaced, and the strip list
-    # restated: without the inherited entries nothing removes a caller's own
-    # x-auth-* or a stray user token before hr-mcp sees them.
+    # Replace user assertions and strip caller-supplied identity headers.
     assertions:
       request:
         replace_inherited: true
@@ -725,56 +319,13 @@ routes:
       pre_invocation:
         # First, so a suspended agent is refused before anything else runs.
         - "run(agent-status)"
-        # `subject: user` names the inbound credential to exchange, keyed by the
-        # TokenRole that jwt-agent registered (role: user). The engine's subject
-        # vocabulary is user | client | caller_workload | this_workload — there
-        # is no `agent`, and on this route the agent IS the inbound subject.
-        #
-        # The agent holds no standing GitHub entitlement: this obtains one for
-        # the call, audience-scoped to github-api.
+        # Exchange the agent credential registered by jwt-agent with role: user.
         - "delegate(github-oauth, target: github-api, audience: github-api, permissions: [repo:read:internal], subject: user)"
         - "!delegation.granted: deny"
         - "run(audit-log)"
 
-  # ----------------------------------------------------------------
-  # send_email
-  # ----------------------------------------------------------------
-  # Scenarios: 07 (Bob PII deny), 08 (Bob taint deny),
-  #            09 (cross-principal isolation — 200 expected)
-  #
-  # PDP-independent and IdP-independent: no cedar:/cel:/opa: step and no
-  # delegation, so this route is byte-identical across all six configs.
-  #
-  # What the policy does (two independent deny paths):
-  #   1. require(perm.email_send)  — only callers with the email_send
-  #                                  permission proceed.
-  #   2. run(audit-log)            — records the attempt BEFORE the
-  #                                  deny plugins run, so denied emails
-  #                                  are still on the audit trail.
-  #   3. run(pii-scan)             — walks all tool args for SSN /
-  #                                  credit-card patterns. On a match,
-  #                                  refuses with violation=pii.detected
-  #                                  (scenario 07). Content-based; fires
-  #                                  regardless of session history.
-  #   4. taint check               — inspects session.labels. If the
-  #                                  resolved subject's session was
-  #                                  previously tainted by get_compensation,
-  #                                  denies with violation=
-  #                                  session_tainted_secret even if the
-  #                                  email body is completely clean
-  #                                  (scenario 08). Taint is subject-
-  #                                  scoped: H(subject:session_id), so a
-  #                                  different user sharing the same
-  #                                  session id is NOT affected (scenario 09).
-  #
-  # Expected outcomes:
-  #   Bob (email_send, SSN in body)              → -32001, violation=pii.detected;
-  #                                                 backend never reached; audit
-  #                                                 record still emitted (scenario 07)
-  #   Bob (email_send, clean body, tainted sess) → -32001, violation=
-  #                                                 session_tainted_secret (scenario 08)
-  #   Bob (email_send, clean body, clean sess)   → 200 OK (scenario 09 baseline)
-  # ----------------------------------------------------------------
+  # Email permission, PII scanning, and session-taint checks: scenarios 07-09.
+  # Audit before denial so blocked attempts are recorded.
   - tool: send_email
     authorization:
       pre_invocation:
@@ -783,42 +334,8 @@ routes:
         - "run(pii-scan)"
         - "security.labels contains \"secret\": deny('external email blocked: this session accessed secret data', 'session_tainted_secret')"
 
-  # ----------------------------------------------------------------
-  # adjust_compensation
-  # ----------------------------------------------------------------
-  # Scenarios: 10 (under-threshold, no approval), 11 (over-threshold,
-  #            manager CIBA approval required)
-  #
-  # What the policy does:
-  #   1. require(role.hr)          — HR-only gate, same as get_compensation.
-  #   2. when: args.amount > 10000 — conditional human-in-the-loop. Small
-  #      require_approval(...)       adjustments (≤$10k) go straight through
-  #                                  (scenario 10, 200 OK). Larger amounts
-  #                                  trigger an OIDC CIBA out-of-band approval
-  #                                  request to the caller's manager
-  #                                  (claim.manager). The gateway suspends
-  #                                  the call with -32120 (pending, NOT a
-  #                                  deny) and polls until the manager
-  #                                  approves or the 24h timeout elapses. The
-  #                                  approval is scoped to args.amount <=
-  #                                  25000, so a sign-off can't be replayed
-  #                                  against a larger change (scenario 11).
-  #   3. run(audit-log)            — records the attempt.
-  #
-  # No PDP step — this route behaves identically under Cedar, CEL, and OPA.
-  #
-  # ON THIS VERIFY PATH scenario 11 does NOT run: manager-approver still
-  # points at Keycloak, and the tenant blocks CIBA besides (no `manager`
-  # claim, and the grant is disabled on both clients — see the plugin's note
-  # above). Scenario 10 is under-threshold so it never reaches the plugin and
-  # passes either way. Run 11 on the Keycloak path: GATEWAY_CONFIG=praxis-cel.yaml.
-  #
-  # Expected outcomes:
-  #   Bob (role.hr, amount=$5,000)  → 200 OK, status="applied"; no approval
-  #                                    flow triggered (scenario 10)
-  #   Bob (role.hr, amount=$25,000) → -32120 (pending); Keycloak path only
-  #                                    (scenario 11)
-  # ----------------------------------------------------------------
+  # Compensation adjustments: scenario 10 applies amounts up to $10K.
+  # Scenario 11 requires manager approval and runs on Keycloak.
   - tool: adjust_compensation
     authorization:
       pre_invocation:

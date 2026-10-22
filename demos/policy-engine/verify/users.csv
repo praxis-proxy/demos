@@ -1,89 +1,15 @@
-## IBM Verify user registration source for the policy-engine demo.
+## Demo users for import-verify-users.sh, based on keycloak/realm-export.json.
+## Multi-valued roles, permissions, teams, and gh_permissions use | separators.
+## Empty cells mean no values. The ibmverify claim mapper handles scalar claims.
 ##
-## Derived from keycloak/realm-export.json — the four demo personas, their
-## realm roles, and the four custom attributes the policy configs read. Keeping
-## this as a flat CSV rather than a second realm-export.json is deliberate: the
-## Verify tenant is provisioned by API, and a CSV is the shape an operator can
-## diff, edit, or extend for their own tenant without learning SCIM.
+## username -> userName; email -> emails[0].value; first_name/last_name -> name.
+## roles/permissions/teams/gh_permissions -> custom attributes.
+## manager names one userName, resolved to a SCIM id after all users exist.
+## Bob names Alice as his approval manager; the other manager cells are empty.
+## Passwords are lab credentials and match post_deploy_variables.json.
 ##
-## Column mapping onto Verify's SCIM model (see import-verify-users.sh):
-##
-##   username        -> userName
-##   email           -> emails[0].value  (type=work; Verify allows exactly one)
-##   first_name      -> name.givenName
-##   last_name       -> name.familyName
-##   password        -> password  (initial clear-text; notifyType=NONE so
-##                      Verify does not mail it to @corp.com, which does not
-##                      resolve)
-##   roles           -> customAttributes[roles]           (pipe-separated)
-##   permissions     -> customAttributes[permissions]     (pipe-separated)
-##   teams           -> customAttributes[teams]           (pipe-separated)
-##   gh_permissions  -> customAttributes[gh_permissions]  (pipe-separated)
-##   manager         -> the SCIM manager RELATIONSHIP, not a custom attribute:
-##                      urn:...:extension:enterprise:2.0:User manager.value
-##                      (SINGLE userName, resolved to that user's SCIM id)
-##
-## Multi-valued cells are pipe-separated, NOT comma-separated, so the file
-## stays valid CSV without quoting. An empty cell means "no values."
-##
-## `manager` is unlike every other column here. The other five map onto fields or
-## custom attributes of the user being created; this one is a REFERENCE to another
-## user, stored as their SCIM id. So:
-##
-##   - It holds ONE userName. A pipe-separated value is rejected.
-##   - The importer sets it in a SECOND PASS, after all users exist — the id it
-##     points at does not exist while the row is being created.
-##   - It is single-valued. The client-side mapper is getManager().userName,
-##     which returns a scalar string.
-##   - An empty cell means no manager and no `manager` claim in that user's token.
-##
-## The value must name a user the tenant has. The importer checks this file first,
-## so a typo is reported as "not a username in this file" rather than surfacing
-## later as a missing tenant user.
-##
-## Two notes carried over from docs/brainstorms/2026-08-31-ibm-verify-idp-requirements.md:
-##
-##   1. EMPTY-STRING PADDING IS NO LONGER NEEDED. Verify emits a custom
-##      attribute as a JSON scalar when it holds exactly one value, and Praxis's
-##      standard claim mapper read roles/teams/permissions via Value::as_array —
-##      which returns None for a string, yielding an empty subject.roles with no
-##      error, presenting as a policy deny rather than a config fault. Both
-##      importers used to append a trailing "" to force array shape. The
-##      `ibmverify` claim-mapper preset now wraps a scalar into a one-element vec
-##      on the engine side, so the values here are sent as they read.
-##
-##      The pad that reached tokens came from the CLIENT mappers, so re-run
-##      import-verify-clients.sh too — an older client still mints ["engineer", ""].
-##
-##      `manager` was never affected: it is not a custom attribute, and its claim
-##      is a scalar string produced by getManager().userName.
-##
-##   2. The realm export's `groups` attribute is intentionally absent below.
-##      It duplicates `teams` for all four personas and no Verify-path policy
-##      reads it (policy-verify-opa.yaml references teams, not groups). Add a
-##      groups column here and to ATTRS in the importer if that changes.
-##
-## Passwords match post_deploy_variables.json (<persona>_pw) so mint-verify-token.sh
-## keeps working unchanged against a freshly provisioned tenant. They are lab
-## credentials for a throwaway TechZone tenant.
-##
-## Personas — the reason each one exists in the demo:
-##   alice    engineer. Baseline: tool_execute only, plus the one gh_permission
-##            that makes the scenario-4 exchange meaningful. Also BOB'S MANAGER —
-##            the approver in the CIBA flow (see below).
-##   bob      HR manager. The permissive persona — view_ssn + pii_access. The only
-##            persona with a `manager`, because he is the one who runs
-##            adjust_compensation in scenarios 10-11.
-##   charlie  auditor. pii_access WITHOUT view_ssn.
-##   eve      HR, but WITHOUT view_ssn — proves the gate is on the permission,
-##            not on the role. Eve and Bob differ only in permissions.
-##
-## Only bob has a manager, and it is alice. Bob's own title ("HR manager") is
-## about his ROLE; the `manager` column is about who approves HIM, which is what
-## require_approval(from: claim.manager) resolves in scenario 11. This mirrors
-## keycloak/realm-export.json, where bob is the sole user with a manager
-## attribute and its value is likewise alice. The other three never reach the
-## approval route, so an empty cell is correct rather than an omission.
+## Alice: engineer with internal-repo access. Bob: HR with view_ssn.
+## Charlie: auditor with pii_access. Eve: HR without view_ssn.
 username,email,first_name,last_name,password,roles,permissions,teams,gh_permissions,manager
 alice,alice@corp.com,Alice,Engineer,aliceLab3151,engineer,tool_execute,engineering,repo:read:internal,
 bob,bob@corp.com,Bob,HRManager,bobLab3151,hr,tool_execute|view_ssn|pii_access|email_send,hr,,alice

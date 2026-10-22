@@ -13,32 +13,18 @@ use praxis_policy_core::{
 
 use crate::status::AgentStatusChecker;
 
-/// `kind:` string operators write in PPE YAML to declare an agent-status
-/// check.
+/// Plugin kind used in policy configuration.
 pub const KIND: &str = "validator/agent-status";
 
-/// Factory for `kind: validator/agent-status`.
-///
-/// Registers a handler for every hook name in `cfg.hooks`. In practice that is
-/// `cmf.tool_pre_invoke`, reached by a `run(agent-status)` step in the route's
-/// `authorization:` block.
-///
-/// Why not `identity.resolve`, where an `auth.*` violation would more naturally
-/// belong: a deny raised during authentication is mapped by the host to HTTP
-/// 401 with a plain-text body, while the scenario harness
-/// (`scenarios/_lib.sh` `expect_violation`) requires the violation code in both
-/// the `X-Policy-Violation` header and the JSON-RPC `.error.data.violation`.
-/// Only an authorization-phase deny produces that envelope. Measured both ways;
-/// `proto_error_code` does not change it.
+/// Registers the checker on the configured hooks, normally cmf.tool_pre_invoke.
+/// Authorization-phase denies preserve the JSON-RPC violation envelope.
 pub struct AgentStatusFactory;
 
 impl PluginFactory for AgentStatusFactory {
     fn create(&self, config: &PluginConfig) -> Result<PluginInstance, Box<PluginError>> {
         let checker = Arc::new(AgentStatusChecker::new(config.clone())?);
 
-        // A checker wired to no hooks loads cleanly and never runs, so the
-        // operator believes agent status is enforced when nothing checks it.
-        // That is the one misconfiguration this plugin must not permit.
+        // Reject a configuration that would never run the checker.
         if config.hooks.is_empty() {
             return Err(Box::new(PluginError::Config {
                 message: format!(
@@ -53,9 +39,7 @@ impl PluginFactory for AgentStatusFactory {
             .hooks
             .iter()
             .map(|h| -> (&'static str, _) {
-                // Leaked for a 'static lifetime, as the reference plugins do:
-                // configs are read at startup and live for the process, so the
-                // leak is bounded by plugin x hook pairs in config.
+                // Hook names require a static lifetime; one allocation per configured hook.
                 let leaked: &'static str = Box::leak(h.clone().into_boxed_str());
                 let adapter: Arc<dyn praxis_policy_core::registry::AnyHookHandler> =
                     Arc::new(TypedHandlerAdapter::<CmfHook, _>::new(Arc::clone(&checker)));

@@ -2,50 +2,25 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Praxis Contributors
 #
-# Run the scenarios and report pass/fail.
+# Run scenarios and exit non-zero if any fail. Approval is automated.
 #
-# Each scenario asserts its own expectations and exits non-zero when one is
-# not met (see scenarios/_lib.sh), so this only has to run them and total it
-# up. Exits non-zero if anything failed, which is what makes it usable as a
-# check before bumping a pin or cutting a release.
-#
-# Usage, from this directory:
-#   ./run-scenarios.sh                 the running gateway, whatever config
-#   ./run-scenarios.sh --all-configs   cedar, then cel, then opa, restarting
-#                                      the gateway for each
-#   ./run-scenarios.sh 03 07           just these
-#
-# USE_VERIFY=true switches the IdP from Keycloak to IBM Verify. It selects both
-# halves of the path, which have to agree: which IdP the scenarios mint from
-# (scenarios/_lib.sh) and which configs --all-configs restarts the gateway on.
-#
+# Usage:
+#   ./run-scenarios.sh                 # running gateway
+#   ./run-scenarios.sh 03 07           # selected scenarios
+#   ./run-scenarios.sh --all-configs   # restart with Cedar, CEL, then OPA
 #   USE_VERIFY=true ./run-scenarios.sh --all-configs
-#     → praxis-verify-cedar.yaml, praxis-verify-cel.yaml, praxis-verify-opa.yaml
 #
-# Needs .env.verify with VERIFY_GATEWAY_CLIENT_SECRET; see .env.verify.example.
-#
-# Scenario 11 needs the CIBA approval loop; it is driven unattended here. On the
-# Verify path it is expected to fail: the CIBA plugin still points at Keycloak
-# and the tenant blocks the grant. Run it on the Keycloak path instead.
-#
-# Two scenarios are bound to one IdP by capability rather than config, in
-# opposite directions, and each skips (exit 77) on the other path:
-#
-#   13  Keycloak only — SPIFFE workload identity. Needs WITH_SPIRE=1.
-#   14  Verify only   — Agent Registry governance. Needs USE_VERIFY=true and
-#                       ./verify/import-verify-clients.sh to have run.
-#
-# See docs/idp-usage-by-scenario.md for why neither ports.
+# Verify requires .env.verify and provisioned clients. Run scenario 11 on
+# Keycloak; its CIBA endpoints still point there. Scenario 13 needs WITH_SPIRE=1
+# on Keycloak; scenario 14 needs a provisioned Verify agent. Unavailable optional
+# layers skip with exit 77. See docs/idp-usage-by-scenario.md.
 set -uo pipefail
 
 cd "$(dirname "$0")"
 
 GATEWAY_BIN="${GATEWAY_BIN:-$PWD/gateway/target/release/policy-engine-gateway}"
 
-# Each PDP config expresses the same deny differently, and scenario 05 asserts
-# whichever is running. The IdP half of the config name is irrelevant here —
-# only the PDP decides the violation string — so the Keycloak and Verify
-# variants of one PDP share a line. Keep this beside the config list it describes.
+# Use the denial code expected from the selected PDP in scenario 05.
 pdp_violation_for() {
   case "$1" in
     praxis-cel.yaml|praxis-verify-cel.yaml) echo "cel.policy_denied" ;;
@@ -56,13 +31,7 @@ pdp_violation_for() {
   esac
 }
 
-# USE_VERIFY picks the IdP; it is read by scenarios/_lib.sh to decide which IdP
-# to MINT from, and the gateway has to be on a matching config or every scenario
-# fails at identity.resolve with auth.untrusted_issuer. So the same switch
-# selects the config set here: the PDP axis is what --all-configs sweeps, and the
-# IdP axis is held fixed by USE_VERIFY.
-#
-# Both axes are listed Cedar, CEL, OPA so the two sweeps are directly comparable.
+# Select matching gateway configs and token issuer; mismatches fail issuer validation.
 if [ "${USE_VERIFY:-}" = "true" ]; then
   CONFIGS=(praxis-verify-cedar.yaml praxis-verify-cel.yaml praxis-verify-opa.yaml)
   DEFAULT_CONFIG="praxis-verify-cedar.yaml"
@@ -76,8 +45,7 @@ WANTED=()
 for arg in "$@"; do
   case "$arg" in
     --all-configs) ALL_CONFIGS=1 ;;
-    # Print the whole header block rather than a fixed line range, so editing
-    # the comment above cannot silently truncate --help mid-sentence.
+    # Use the complete header for --help.
     -h|--help) sed -n '2,/^set /p' "$0" | sed '$d'; exit 0 ;;
     *) WANTED+=("$arg") ;;
   esac

@@ -1,28 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Praxis Contributors
 
-//! Denies a request when the calling agent's IBM Verify Agent Registry status
-//! is not `ACTIVE`.
+//! Deny tool calls unless the agent is ACTIVE in the IBM Verify Agent Registry.
 //!
-//! IBM Verify records an agent's lifecycle status (`ACTIVE`, `SUSPENDED`,
-//! `UNDER_REVIEW`, `DEFAULT`) but does not enforce it at the token endpoint: a
-//! suspended agent still mints tokens, and tokens minted before the suspend
-//! stay valid. Verified against a live tenant. So "suspend this agent" is only
-//! a real control if something downstream of the IdP honors it, and here that
-//! is the policy layer.
+//! Runs on cmf.tool_pre_invoke via run(agent-status), after identity resolution.
+//! Authorization denies carry the JSON-RPC error envelope used by the scenarios;
+//! authentication denies return HTTP 401.
 //!
-//! Runs on `cmf.tool_pre_invoke`, reached by a `run(agent-status)` step in the
-//! route's `authorization:` block, and reads the already-resolved subject from
-//! `Extensions`. On the allow path it returns the payload unchanged — it makes
-//! no contribution of its own, it only decides.
-//!
-//! It runs on an authorization hook rather than `identity.resolve`, despite the
-//! `auth.*` violation code, for a wire-shape reason: a deny during
-//! authentication becomes HTTP 401 with a plain-text body, whereas the demo's
-//! scenario harness asserts the violation code in BOTH the
-//! `X-Policy-Violation` header and the JSON-RPC `.error.data.violation`. Only
-//! an authorization-phase deny produces that envelope. See the note on
-//! [`factory::AgentStatusFactory`].
+//! Verify can issue tokens to suspended agents, so the gateway checks registry
+//! status separately. Cached status remains valid until its TTL expires.
 
 /// Plugin configuration.
 pub mod config;
@@ -38,16 +24,8 @@ pub use factory::{AgentStatusFactory, KIND};
 pub use registry::{RegistryClient, StatusCache};
 pub use status::AgentStatusChecker;
 
-/// Violation code emitted when the agent is not `ACTIVE`.
-///
-/// Follows the `auth.*` convention used by the identity plugins
-/// (`auth.untrusted_issuer`, `auth.token_expired`). There is no central
-/// violation registry; the code is the string the host maps to the wire.
+/// Violation code for an agent whose status is not ACTIVE.
 pub const VIOLATION_AGENT_SUSPENDED: &str = "auth.agent_suspended";
 
-/// Violation code emitted when the registry could not be consulted.
-///
-/// Distinct from [`VIOLATION_AGENT_SUSPENDED`] on purpose: "we could not ask"
-/// and "we asked and it is suspended" are different operational facts, and
-/// collapsing them would make a tenant outage look like a governance action.
+/// Violation code for a failed registry lookup.
 pub const VIOLATION_REGISTRY_UNAVAILABLE: &str = "auth.agent_registry_unavailable";

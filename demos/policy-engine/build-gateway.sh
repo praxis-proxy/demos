@@ -2,46 +2,21 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Praxis Contributors
 #
-# Build the demo gateway and echo the binary path on stdout.
+# Build the gateway and print its binary path.
 #
-# The gateway (./gateway) is a thin binary that composes praxis-ai's AI filters
-# (mcp classifier, ...) with the `policy` filter. Since praxis 0.6.0 the
-# published `praxis-proxy-filter` carries `policy-engine` in its default
-# features, so praxis itself now comes from crates.io and there is no praxis
-# checkout to resolve. praxis-ai + the feature auto-register both filters, so
-# there is no manual wiring.
-#
-# One checkout is still needed, at `gateway/.policy`: the two reference plugins
-# are unpublished, and they reach the engine by path (see gateway/Cargo.toml).
-# Resolved from the first match:
-#   PPE_DIR                   path to a local praxis-policy checkout (symlinked)
-#   existing gateway/.policy  reused as-is
-#   sibling ../praxis-policy  used when there is one
-#   otherwise                 clone PPE_GIT_URL @ PPE_GIT_REF (the tag below)
-#
-# Keep that checkout on the tag matching the engine release praxis depends on.
-# A checkout on some other branch links its `praxis-policy-core` against the
-# published rest of the engine, which puts two copies of the crate in the graph.
-# `check_graph` below fails the build when that happens rather than letting it
-# surface as a confusing type error deep in the dependency tree.
-#
-# Other knobs:
-#   GATEWAY_PROFILE=release|debug       (default: release)
+# Resolve gateway/.policy from PPE_DIR, an existing checkout, a sibling
+# praxis-policy directory, or PPE_GIT_URL at PPE_GIT_REF (default below).
+# The policy checkout must match the engine version required by Praxis.
+# GATEWAY_PROFILE=debug selects a debug build; release is the default.
 set -euo pipefail
 
-# The engine release the gateway resolves from crates.io, and the tag the
-# checkout supplying the reference plugins must sit on. Bump together with the
-# `praxis-proxy-*` version in gateway/Cargo.toml: praxis and the engine are one
-# change split across two repos.
+# Policy tag for the reference plugins. Keep compatible with gateway/Cargo.toml.
 DEFAULT_PPE_REF="v0.4.1"
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/gateway"
 PPE_LINK="$DIR/.policy"
 
-# 1. Resolve the policy engine into ./gateway/.policy.
-#
-# A symlink is never fetched into. `.policy` pointing at somebody's working
-# checkout means `git checkout` here would move their branch out from under them.
+# Reuse symlinks without fetching or changing the source checkout.
 if [ -n "${PPE_DIR:-}" ]; then
   target="$(cd "$PPE_DIR" && pwd)"
   ln -sfn "$target" "$PPE_LINK"
@@ -71,11 +46,7 @@ else
   echo "gateway: .policy at $(git -C "$PPE_LINK" rev-parse --short HEAD)" >&2
 fi
 
-# 2. Check the resolved dependency graph before trusting a build from it.
-#
-# Every failure this catches otherwise surfaces as a type error hundreds of
-# lines into a cargo build, naming a trait or struct rather than the pin that
-# actually drifted. Cheap to check, expensive to diagnose from the compiler.
+# Check for duplicate crates and unused patches before building.
 count_pkg() { grep -c "^name = \"$1\"\$" "$DIR/Cargo.lock" 2>/dev/null || true; }
 
 check_graph() {
@@ -122,9 +93,7 @@ gateway:                              version is missing or did not apply.
 MSG
 }
 
-# A stale lock is the common case and cargo cannot always migrate one across a
-# pin bump: it drops the patches and resolves an older graph instead. Rebuild
-# the lock once and re-check before treating it as a real version conflict.
+# Regenerate a stale lockfile once before reporting a version conflict.
 if ! check_graph; then
   echo "gateway: dependency graph is incoherent, regenerating Cargo.lock" >&2
   ( cd "$DIR" && cargo generate-lockfile >&2 )
@@ -143,8 +112,7 @@ flag=""
 echo "gateway: cargo build ($PROFILE)" >&2
 ( cd "$DIR" && cargo build $flag >&2 )
 
-# cargo may have re-resolved during the build; a patch dropped there is just as
-# silent, so check what was actually compiled rather than what was planned.
+# Check again in case Cargo changed the dependency graph during the build.
 if ! check_graph; then
   echo "gateway: the build re-resolved into an incoherent graph." >&2
   explain_graph

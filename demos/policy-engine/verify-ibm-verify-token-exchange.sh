@@ -1,22 +1,9 @@
 #!/usr/bin/env bash
-# Verify IBM Verify is wired correctly for RFC 8693 token exchange.
-# Mints a user token, asks IBM Verify to exchange it for the
-# workday-api audience as the praxis-gateway client, and prints
-# whether the response carries the right `aud` claim.
 #
-# Usage:
-#   ./verify-ibm-verify-token-exchange.sh
-#
-# Expected output:
-#   ✓ alice mint                       OK
-#   ✓ praxis-gateway → workday-api     OK (aud=workday-api)
-#   minted token aud claim: workday-api
-#   minted token sub claim: <alice's subject id>
-#
-# If you see "Client not allowed to exchange" or similar — the
-# token-exchange permission on workday-api didn't import correctly.
-# Tear down + redo: `docker compose down -v && docker compose up -d`.
-# 
+# Check RFC 8693 token exchange against IBM Verify.
+# Usage: ./verify-ibm-verify-token-exchange.sh
+# Reads minting and exchange credentials from post_deploy_variables.json.
+# See verify/README.md for tenant provisioning and required entitlements.
 
 set -euo pipefail
 post_deploy_variables="post_deploy_variables.json"

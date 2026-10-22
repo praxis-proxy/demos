@@ -1,20 +1,7 @@
 #!/usr/bin/env bash
-# Alice (engineering, gh_permissions=[repo:read:internal]) calls
-# search_repos for an INTERNAL repo. Expected:
 #
-#   Layer 1 — APL gate `require(group.engineering OR group.security)`
-#             → passes (Alice is engineering)
-#   Layer 2 — PDP rule (Cedar in policy-cedar.yaml; CEL in policy-cel.yaml;
-#             Rego in policy-opa.yaml — all express the same decision)
-#             → permits (engineer + visibility=internal)
-#   Layer 3 — Token exchange to github-api
-#             → Keycloak mints token with permissions=[repo:read:internal]
-#             (Alice's gh_permissions user attribute → claim mapper)
-#   Layer 4 — `delegation.granted.permissions contains 'repo:read:internal'`
-#             → passes
-#
-# Result: 200, hr-mcp logs show Authorization=<minted github token>
-#         and the parsed args reach the tool intact.
+# Alice may read an internal repo: team gate and PDP allow, then delegation
+# returns a GitHub token with repo:read:internal. Expect HTTP 200 and one upstream call.
 
 set -euo pipefail
 source "$(dirname "$0")/_lib.sh"

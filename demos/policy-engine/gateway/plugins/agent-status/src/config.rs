@@ -13,12 +13,7 @@ fn default_request_timeout_ms() -> u64 {
     5_000
 }
 
-/// Default cache lifetime for a status lookup.
-///
-/// This interval IS the revocation window: an agent suspended at the tenant
-/// keeps passing until its entry expires. Five seconds keeps the demo honest
-/// (a suspend takes effect while the presenter is still talking) without a
-/// registry round-trip on every call.
+/// Default cache lifetime. Suspension takes effect after the cached status expires.
 fn default_cache_ttl_seconds() -> u64 {
     5
 }
@@ -27,11 +22,9 @@ fn default_cache_ttl_seconds() -> u64 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OnUnavailable {
-    /// Refuse the call. The default: a kill switch that fails open is not a
-    /// kill switch.
+    /// Refuse the call when the registry is unavailable (default).
     Deny,
-    /// Allow the call through. Only for a demo that must survive a tenant
-    /// outage; it means a suspended agent works whenever the registry is down.
+    /// Allow the call even when registry status cannot be checked.
     Allow,
 }
 
@@ -48,43 +41,30 @@ pub struct AgentStatusConfig {
     /// `https://tenant.verify.ibm.com/v1.0/Agents`. The agent id is appended.
     pub registry_url: String,
 
-    /// Agent Registry record id (a UUID).
-    ///
-    /// Used when the agent's token carries no claim naming its own registry
-    /// id, which is the case on IBM Verify today: a `client_credentials` token
-    /// carries `sub`/`client_id` (the OAuth client) but nothing linking it to
-    /// the Agent record. The association is held registry-side, and
-    /// `oauthClients` is write-only there, so it cannot be resolved by lookup
-    /// either. Hence config.
+    /// Agent Registry record id. Verify client-credentials tokens do not include it,
+    /// and the registry does not expose the OAuth client association on readback.
     pub agent_id: Option<String>,
 
     /// Status the agent must hold. Defaults to `ACTIVE`.
     #[serde(default = "default_required_status")]
     pub required_status: String,
 
-    /// How long a status lookup is reused. See
-    /// [`default_cache_ttl_seconds`] on why this is the revocation window.
+    /// Status cache lifetime, which bounds the delay before suspension takes effect.
     #[serde(default = "default_cache_ttl_seconds")]
     pub cache_ttl_seconds: u64,
 
-    /// Behavior when the registry cannot be reached or returns garbage.
+    /// Behavior when the registry is unreachable or returns an invalid response.
     #[serde(default)]
     pub on_unavailable: OnUnavailable,
 
-    /// Token endpoint for the admin client-credentials mint. Defaults to
-    /// `<registry origin>/oauth2/token`, which is right for an IBM Verify
-    /// tenant; set it explicitly for anything else.
+    /// Token endpoint. Defaults to `<registry origin>/oauth2/token`.
     #[serde(default)]
     pub token_url: Option<String>,
 
-    /// Admin client id used to read the registry.
+    /// Registry reader client id.
     pub admin_client_id: String,
 
-    /// Name of the environment variable holding the admin client secret.
-    ///
-    /// A name rather than the value: the secret is a live tenant credential
-    /// and must not sit in a rendered config on disk. Mirrors the
-    /// `client_secret_source: {kind: env_var}` shape the delegators use.
+    /// Environment variable holding the registry client secret.
     pub admin_client_secret_env: String,
 
     /// Per-request deadline for the token mint and the registry GET.
@@ -173,8 +153,6 @@ mod tests {
         assert!(err.to_string().contains("admin_client_id"));
     }
 
-    /// The secret is named, never inlined — a rendered config on disk must not
-    /// carry a live tenant credential.
     #[test]
     fn missing_admin_secret_env_name_is_rejected() {
         let mut v = minimal();
@@ -204,8 +182,6 @@ mod tests {
         assert_eq!(cfg.resolved_token_url().expect("explicit"), "https://other/token");
     }
 
-    /// A registry URL that is not Verify-shaped cannot be guessed from, and the
-    /// error must say what to do about it rather than inventing an endpoint.
     #[test]
     fn an_underivable_token_url_is_an_error_naming_the_fix() {
         let mut v = minimal();

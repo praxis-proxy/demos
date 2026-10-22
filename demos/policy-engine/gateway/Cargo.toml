@@ -13,41 +13,16 @@ path = "src/main.rs"
 
 [dependencies]
 praxis-ai-proxy = { git = "https://github.com/praxis-proxy/ai", rev = "c39f7198", features = ["praxis-main"] }
-# Declared to turn features on graph-wide rather than for anything this crate
-# calls. praxis-ai declares its praxis dependencies with no features at all, so
-# whatever it needs has to be enabled by the binary at the root of the graph.
-#
-# `policy-engine` registers the `policy` filter. It is in praxis's default
-# features since 0.6.0, and named here anyway so the dependency is explicit.
-#
-# `chain-binding` used to be listed too: 0.6.0 moved `DeferredCredential`,
-# `PendingCredentials` and `ChainBindingContext::bind_chain` behind it and the
-# old praxis-ai rev needed them. In 0.7.5 the feature is an empty stub and
-# praxis-ai 0.8.0 no longer reaches for any of it, so it is gone.
+# Enable the policy filter used by this gateway.
 praxis-proxy-filter = { version = "0.7.5", features = ["policy-engine"] }
-# Likewise for `admin-api`: praxis-ai's server calls the admin-endpoint helpers
-# unconditionally and praxis gates them behind this feature. Without it the
-# build fails on `add_admin_endpoints_to_pingora_server` not being found.
+# praxis-ai's server calls the admin endpoint helpers.
 praxis-proxy-protocol = { version = "0.7.5", features = ["admin-api"] }
 
-# Unpublished reference plugins the demo registers itself, in main.rs. This is
-# the worked example of extending the engine with a plugin it does not bundle.
-#
-# They are workspace members in the engine checkout, so they resolve
-# praxis-policy-core by path. The `[patch]` below keeps that the only copy in
-# the graph; see the note there.
+# Unpublished reference plugins, registered in src/main.rs.
 praxis-policy-plugin-pii-scanner = { path = ".policy/reference/plugins/pii-scanner" }
 praxis-policy-plugin-audit-logger = { path = ".policy/reference/plugins/audit-logger" }
 
-# This demo's own plugin, written against the same extension contract as the two
-# reference plugins above. It lives in `plugins/` rather than under `.policy/`
-# because `.policy` is a vendored checkout of the engine AND its own git repo —
-# a crate added there would be an untracked addition to someone else's tree.
-#
-# It reads `praxis-policy-core` by path for the same reason the reference
-# plugins do: the `[patch]` below keeps that the single copy in the graph, and a
-# registry copy here would mean two `PluginFactory` traits and a main.rs that
-# no longer typechecks.
+# Local plugin for IBM Verify Agent Registry status checks.
 praxis-policy-plugin-agent-status = { path = "plugins/agent-status" }
 
 clap = { version = "4", features = ["derive"] }
@@ -56,41 +31,10 @@ tracing = "0.1"
 [target.'cfg(unix)'.dependencies]
 tikv-jemallocator = "0.7"
 
-# Everything in this table exists to keep exactly one copy of the policy engine
-# in the graph: the 0.4.0 one that `.policy` supplies by path.
+# Share the policy core and orchestration crates with the path-based plugins.
+# The .policy checkout must match the engine version required by Praxis; a
+# version mismatch leaves duplicate crates and incompatible PluginFactory traits.
+# See DEFAULT_PPE_REF in build-gateway.sh.
 [patch.crates-io]
-# The engine comes from crates.io too, except these two. The reference
-# plugins above are `publish = false` and read the engine by path, so without
-# the patch the graph holds two copies of each: one by path, one from the
-# registry. Two copies of `praxis-policy-core` means two `PluginFactory` traits,
-# at which point the host registration in main.rs stops typechecking.
-#
-# Only these two, because only these two are reachable from the reference
-# plugins. The other eleven resolve from the registry with no duplicate.
-#
-# So `.policy` should sit on the released tag. A checkout on some other branch
-# links its `praxis-policy-core` against the published rest of the engine.
-
 praxis-policy-core = { path = ".policy/crates/ppe-core" }
 praxis-policy-orchestration = { path = ".policy/crates/ppe-orchestration" }
-# The following is required to test ibmverify as a claim_mapper, which the
-# engine gained in 0.4.0:
-#praxis-policy-plugin-identity-jwt = { path = ".policy/builtins/plugins/identity-jwt" }
-#
-# `.policy` and the praxis fork are one pin split across two repos: the fork's
-# `ppe` requirement has to match the tag `.policy` sits on (DEFAULT_PPE_REF in
-# build-gateway.sh). When they disagree, cargo cannot apply the path patches
-# above, drops them without a word, resolves the engine family from the registry
-# instead, and the graph ends up holding both copies. That is what `check_graph`
-# reports as two copies of praxis-policy-core.
-
-# praxis itself is no longer patched. It used to be redirected at a fork
-# (tedhabeck/praxis, branch ppe/v4bump) because the published praxis-proxy-*
-# 0.7.x required `ppe = "0.3.1"`, which dragged a second engine family into the
-# graph. Published 0.7.5 requires `ppe = "0.4.1"`, so the released crates agree
-# with the engine tag `.policy` sits on and the fork is unnecessary.
-#
-# Note the two pins below must match what praxis requires, exactly: `^0.4.1`
-# cannot be satisfied by a 0.4.0 or 0.5.0 path patch. Cargo does not report
-# that as an error — it drops the patch and resolves the registry copy instead,
-# leaving two praxis-policy-core in the graph.

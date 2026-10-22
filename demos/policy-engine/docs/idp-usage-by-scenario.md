@@ -115,9 +115,7 @@ flowchart TB
     class NA,NB,NC,ND,NE,NF note
 ```
 
-## Narration deltas on the Verify path
-
-Neither changes a scenario's pass/fail, both change what can honestly be said:
+## Verify configuration differences
 
 - **Claim shape.** Verify emits `roles` / `teams` / `permissions` as scalars at
   N=1, so the Verify configs use `claim_mapper: ibmverify` instead of
@@ -127,15 +125,15 @@ Neither changes a scenario's pass/fail, both change what can honestly be said:
   issuer alongside Verify (commit `c596244`), because the chat agent and the
   auth-channel still mint from Keycloak on some paths. A 200 therefore does not
   prove Verify validated the token — confirm the issuer in the audit record.
-- **Two clients, not one.** Verify refuses to let a client exchange tokens it
+- **Separate clients.** Verify refuses to let a client exchange tokens it
   issued itself (`CSIAQ5207E`), so minting uses `HR_COPILOT_CLIENT_ID` and
   exchange uses `VERIFY_GATEWAY_CLIENT_ID` — the same split as Keycloak's
   `hr-copilot` mints / `praxis-gateway` exchanges.
 
 ## Agent identity: why 13 and 14 do not port
 
-These two are the only scenarios bound to one IdP by *capability* rather than by
-configuration, and they are bound in opposite directions.
+Scenario 13 requires Keycloak SPIFFE client authentication. Scenario 14 requires
+Verify Agent Registry.
 
 | | 13 — SPIFFE workload identity | 14 — Verify agent identity |
 |---|---|---|
@@ -147,14 +145,6 @@ configuration, and they are bound in opposite directions.
 | Enforced by | Keycloak, at client authentication | **the gateway** — Verify does not gate issuance on status |
 | On the other IdP | no Verify counterpart | no Keycloak counterpart |
 
-The asymmetry in the "enforced by" row is the one that surprises people. A
-suspended Verify agent still mints tokens, and tokens minted before the suspend
-stay valid — so an agent's governance state is only load-bearing if something
-downstream of the IdP reads it. That is what `run(agent-status)` does, and it
-matches IBM's own guidance: their Agent-Identity-with-Vault cookbook has the
-token exchange succeed while the resource denies.
-
-Worth noting for later: Agent Registry records accept `authMethods` of type
-`svid-jwt` and `svid-x509`, so Verify can govern a SPIFFE identity rather than
-replace one. That would collapse the two columns above into a single story, and
-is the most interesting unexplored direction here.
+Verify can issue tokens to suspended agents, so `run(agent-status)` reads the
+registry and enforces status on the tool route. Cached status remains valid
+until its TTL expires.

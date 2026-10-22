@@ -2,71 +2,22 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Praxis Contributors
 #
-# Agent identity: a GOVERNED agent acts as itself, and an admin can switch it off.
+# Verify agent identity and suspension enforcement.
 #
-# Scenario 13 proves an agent can be identified — it presents a SPIFFE JWT-SVID
-# that SPIRE issued only because the process passed attestation. That answers
-# "is this really the agent?" and nothing else. There is no registry of agents,
-# no owner, no status, and no way for a human to say "not that one, not today".
+# Authenticate with X-Agent-Token, check registry status, exchange for GitHub
+# access, and strip caller-supplied identity headers. Suspend the agent, wait
+# for the status cache to expire, assert denial, then restore its status.
+# Verify still issues tokens to a suspended agent; the gateway enforces status.
 #
-# This scenario is the other half, and it is the half enterprises ask about.
-# The agent is an IBM Verify Agent Identity: a first-class record in the Agent
-# Registry with a display name, an owner, tags, and a lifecycle status. It
-# authenticates as itself with client_credentials — no human, no user token —
-# and calls search_repos_agent on its own authority. Then an admin suspends it,
-# and the next call fails.
-#
-# What the gateway does:
-#
-#   1. resolves the agent from X-Agent-Token alone (jwt-agent, role: user, with
-#      replace_inherited so the global user/client resolvers do not run),
-#   2. runs `run(agent-status)`, which reads the agent's record from
-#      /v1.0/Agents and denies unless its status is ACTIVE,
-#   3. runs `delegate(github-oauth, ..., subject: user)` to obtain a
-#      github-api-scoped credential — the agent holds no standing GitHub
-#      entitlement; the gateway brokers one for the call,
-#   4. strips a stray X-User-Token and a spoofed X-Auth-User-Id.
-#
-# ---------------------------------------------------------------------------
-# Why the gateway enforces status, and not IBM Verify
-# ---------------------------------------------------------------------------
-# Verify RECORDS an agent's status but does not gate token issuance on it: a
-# SUSPENDED agent still mints tokens, and tokens minted before the suspend stay
-# valid. Verified against a live tenant. That is also IBM's own architecture —
-# the Agent-Identity-with-Vault cookbook has the token exchange succeed while
-# the RESOURCE denies for a missing/invalid agent registration. Praxis is the
-# resource here, so the kill switch lives in policy.
-#
-# The practical consequence, which this scenario shows rather than hides: the
-# plugin caches the status, and that interval IS the revocation window. A
-# suspended agent keeps working until the entry expires. SPIFFE has the same
-# shape of problem with SVID TTL; neither mechanism is instant.
-#
-# ---------------------------------------------------------------------------
-# Verify-only, by construction
-# ---------------------------------------------------------------------------
-# Agent Registry is an IBM Verify capability with no Keycloak counterpart, just
-# as Keycloak's SPIFFE-native client authentication (scenario 13) has no Verify
-# counterpart. Neither scenario ports. On the Keycloak path this one reports
-# itself skipped (exit 77).
-#
-# Needs:
-#   USE_VERIFY=true                     and a praxis-verify-* gateway config
-#   ./verify/import-verify-clients.sh    to have provisioned the agent
-#   .env.verify with the two agent-status credentials, each holding exactly one
-#     entitlement and neither able to do the other's job:
-#       VERIFY_AGENT_READER_CLIENT_ID/_SECRET      readAgents        — the gateway
-#       VERIFY_AGENT_OPERATOR_CLIENT_ID/_SECRET    manageAgentStatus — this script
-#     The tenant-admin pair is provisioning-only; nothing here reads it.
+# Requires USE_VERIFY=true, a praxis-verify-* config, and an agent provisioned by
+# verify/import-verify-clients.sh. .env.verify must contain the readAgents reader
+# and manageAgentStatus operator credentials. Skips with exit 77 if unavailable.
 set -euo pipefail
 source "$(dirname "$0")/_lib.sh"
 
 PDV="${PDV:-$DEMO_DIR/post_deploy_variables.json}"
 
-# ---------------------------------------------------------------------------
-# Skip guards. Each names what to run, because "skipped" with no reason is
-# indistinguishable from "quietly broken".
-# ---------------------------------------------------------------------------
+# Skip when the required Verify configuration is unavailable.
 if [ "${USE_VERIFY:-}" != "true" ]; then
   note "agent identity is IBM Verify only (no Keycloak counterpart): skipping"
   note "  run USE_VERIFY=true GATEWAY_CONFIG=praxis-verify-opa.yaml ./restart.sh"
@@ -107,9 +58,7 @@ if [ ! -x "$SET_STATUS" ]; then
   exit 77
 fi
 
-# The scenario suspends a live tenant record. Restore it however we exit, or a
-# failed run leaves the next one starting from SUSPENDED and failing for a
-# reason that has nothing to do with the code under test.
+# Restore status on exit so a failed run does not leave the agent suspended.
 restore_active() { "$SET_STATUS" ACTIVE >/dev/null 2>&1 || true; }
 trap restore_active EXIT
 
@@ -126,9 +75,7 @@ mint_agent() {
 }
 
 call_as_agent() {
-  # Only X-Agent-Token is load-bearing. The other two are deliberate noise: a
-  # stray user token and a spoofed asserted header, both of which the route's
-  # strip list must remove before hr-mcp sees them.
+  # Authenticate with X-Agent-Token; the route must strip the spoofed user headers.
   local agent_token="$1"
   curl -isS --max-time 25 -X POST "$GATEWAY/mcp" \
     -H 'Content-Type: application/json' \
@@ -138,9 +85,7 @@ call_as_agent() {
     --data '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_repos_agent","arguments":{"visibility":"internal"}}}'
 }
 
-# The plugin's cache_ttl_seconds is the revocation window, so a status change
-# is not visible until it expires. Read it from the running config rather than
-# hardcoding, so editing the config cannot silently make this scenario flaky.
+# Wait for the configured status cache TTL before checking suspension.
 ttl_seconds() {
   local cfg="$DEMO_DIR/${GATEWAY_CONFIG:-praxis-verify-opa.yaml}"
   local policy ttl
@@ -189,9 +134,7 @@ step "An admin suspends the agent in IBM Verify"
 }
 pass_ "agent record set to SUSPENDED"
 
-# Worth showing rather than asserting away: the IdP still issues. Suspension is
-# recorded at Verify but not enforced there, which is exactly why the gateway
-# has to be the one to refuse.
+# Confirm Verify still issues tokens after suspension.
 SUSPENDED_TOKEN="$(mint_agent)"
 if [ -n "$SUSPENDED_TOKEN" ]; then
   pass_ "a SUSPENDED agent STILL mints a token (Verify does not gate issuance)"

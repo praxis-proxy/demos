@@ -1,152 +1,24 @@
 #!/usr/bin/env bash
-# Provision the demo personas into an IBM Verify tenant from verify/users.csv.
 #
-# This closes the gap left by decision D5 in
-# docs/brainstorms/2026-08-31-ibm-verify-idp-requirements.md ("tenant setup is
-# documented, not automated") for the part that is most tedious and most
-# error-prone by hand: the four users, their four custom attributes, and the
-# manager relationships between them.
+# Provision Verify users, custom attributes, and manager links from users.csv.
+# Run this before import-verify-clients.sh.
 #
 # Usage:
-#   ./import-verify-users.sh                    # create attrs + users
-#   ./import-verify-users.sh --dry-run          # print the SCIM payloads, send nothing
-#   ./import-verify-users.sh --attrs-only       # define the custom attributes, no users
-#   ./import-verify-users.sh --users-only       # assume attributes already exist
-#   ./import-verify-users.sh --csv other.csv    # a different user source
-#   ./import-verify-users.sh --delete           # remove the CSV's users from the tenant
+#   ./import-verify-users.sh [--csv other.csv]
+#   ./import-verify-users.sh --dry-run
+#   ./import-verify-users.sh --attrs-only
+#   ./import-verify-users.sh --users-only
+#   ./import-verify-users.sh --delete
 #
-# Requires: curl, jq, python3 (CSV parsing only — no third-party packages).
+# Requires: curl, jq, python3, and an API client with manageUsers/manageAttributes.
+# Set VERIFY_ADMIN_CLIENT_ID and VERIFY_ADMIN_CLIENT_SECRET in .env.verify.
+# The tenant URL comes from post_deploy_variables.json.
 #
-# ---------------------------------------------------------------------------
-# What this needs from the tenant, and why it is a SEPARATE client
-# ---------------------------------------------------------------------------
-# The Users and Attributes APIs authenticate with a Verify *API client* whose
-# entitlements are checked per-endpoint — these are entitlements, not OAuth
-# scopes:
-#
-#   manageUsers       (or manageUserGroups)  -> POST/DELETE /v2.0/Users
-#   manageAttributes                         -> POST /v1.0/attributes
-#
-# Neither hr-copilot (HR_COPILOT_CLIENT_ID) nor the gateway exchange client
-# (GATEWAY_CLIENT_ID) has them, and they should not: those two are in the demo's
-# hot path, and a client that can mint alice's token should not also be able to
-# rewrite alice's permissions. Create a third API client in
-#   Security -> API access -> Add API client
-# and put its credentials in .env.verify (gitignored) as:
-#
-#   VERIFY_ADMIN_CLIENT_ID=...
-#   VERIFY_ADMIN_CLIENT_SECRET=...
-#
-# The tenant URL is derived from IBM_VERIFY_TOKEN_ENDPOINT in
-# post_deploy_variables.json, so there is nothing else to configure.
-#
-# ---------------------------------------------------------------------------
-# The empty-string padding is GONE — the engine handles scalars now
-# ---------------------------------------------------------------------------
-# Verify still serialises a custom attribute holding exactly one value as a JSON
-# SCALAR, not a one-element array. This used to be load-bearing here: Praxis's
-# standard claim mapper read roles/teams/permissions via Value::as_array, which
-# returns None for a JSON string, so a single-role persona got an EMPTY
-# subject.roles with no error raised, `require(role.hr)` failed, and the whole
-# thing presented as a policy deny rather than the config fault it was. Every
-# multi-valued attribute was therefore padded with a trailing "" to force array
-# shape, at the known cost that "" became a real set member and showed up in
-# audit records and X-Policy-* debug output.
-#
-# The `ibmverify` claim-mapper preset removes the reason for it: it wraps a JSON
-# scalar into a one-element vec before the structured fields are read, so an
-# unpadded single-valued attribute now maps correctly. The policy selects it with
-#   claim_mapper: ibmverify
-# on the jwt-user and jwt-client plugins (policy-verify-opa.yaml.tmpl).
-#
-# So the values sent below are unpadded, and the CELx mappers in
-# import-verify-clients.sh no longer append `+ ['']` either. Both sides have to
-# agree: a tenant whose clients still carry the old padded mappers will mint
-# ["engineer", ""] no matter what this script stores, because the mapper rebuilds
-# the array from getCustomValues(). Re-run import-verify-clients.sh after this.
-#
-# If you are pointing this at a gateway WITHOUT the ibmverify preset, the padding
-# is load-bearing again — see git history for the version that appends it.
-#
-# `manager` is NOT one of these attributes and never was padded — it is not a
-# custom attribute at all. See the next section.
-#
-# ---------------------------------------------------------------------------
-# `manager` is a SCIM relationship, not a custom attribute
-# ---------------------------------------------------------------------------
-# The other four claims are custom attributes in customAttribute1..150 slots.
-# `manager` is different in kind: it is the standard SCIM EnterpriseUser
-# extension's manager reference,
-#
-#   "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User": {
-#     "manager": { "value": "<SCIM id>", "$ref": "<.../Users/<id>>" }
-#   }
-#
-# and its value is the manager's SCIM **id**, not their userName. The tenant
-# generates $ref itself; only `value` is written.
-#
-# This matters because of what the token mapper does with it. The introspection
-# mapper on the client is:
-#
-#   statements:
-#     - context: manager := user.getManager()
-#     - return: context.manager.userName
-#
-# getManager() FOLLOWS the reference above and returns the manager's user object,
-# and the mapper reads .userName off it. So the claim is a scalar string
-# ("alice") produced by a relationship traversal — there is no custom attribute
-# holding it, and creating one would be dead weight the mapper never reads.
-# (The tenant's own `manager_uid` attribute is sourced from
-# ...enterprise:2.0:User:manager.value, i.e. from this same relationship.)
-#
-# TWO CONSEQUENCES for this script:
-#
-#   1. It cannot be set in the CREATE payload, because the manager's id does not
-#      exist until that user is created. bob names alice, and if alice is created
-#      after bob there is nothing to reference. So managers are a SECOND PASS
-#      (link_managers) after every user exists, resolving userName -> id.
-#
-#   2. It is a PATCH, not a field: op=replace on
-#      <enterprise schema>:manager. Verified on a live tenant — 204, and the
-#      read-back carries the generated $ref. op=remove clears it.
-#
-# ---------------------------------------------------------------------------
-# pwdReset: a REQUEST HEADER, not a payload field
-# ---------------------------------------------------------------------------
-# Verify sets pwdReset=true on every user created through the SCIM API — the
-# "user must change password at next sign-in" flag. It is how Verify treats any
-# admin-set password. The user is otherwise perfect, but ROPC refuses it:
-#
-#   CSIAQ0267E The password must be changed.
-#
-# which names neither the user nor the cause, so it reads like a bad password in
-# users.csv or a broken client.
-#
-# The fix is a request header on POST /v2.0/Users:
-#
-#   usershouldnotneedtoresetpassword: true
-#
-# Verified: with it the create returns pwdReset=null and the password grant
-# works immediately; without it, pwdReset=true and every mint fails.
-#
-# It is worth being explicit about WHY this is a header, because the natural
-# assumption is that it must be a payload field somewhere. It is not, and the
-# payload cannot express it — all of these were tried against a live tenant:
-#
-#   - pwdReset:false in the create body   -> 201, silently ignored
-#   - PATCH pwdReset                      -> 400 CSIAI0174E (read-only; a PATCH
-#                                            of `active` returns 204, so the
-#                                            request shape was not the problem)
-#   - PATCH password to a NEW value       -> 204, pwdReset STAYS true — an admin
-#                                            write is itself a reset
-#   - userCategory:"federated"            -> 400, and changes what the user is
-#
-# So there is no way to discover this from the payload or from reading a working
-# user back: an already-fixed user and a header-created one look identical.
-#
-# create_users() also still reports any user that comes back with pwdReset=true,
-# which now means the header was rejected or ignored (a tenant that does not
-# honour it) rather than the normal state of affairs.
+# User claims are unpadded; the gateway must use claim_mapper: ibmverify.
+# Managers are linked by SCIM id after all users exist. The request header
+# usershouldnotneedtoresetpassword prevents pwdReset=true, which blocks
+# ROPC (CSIAQ0267E). Existing flagged users still need a password change.
+# See verify/README.md for setup and schema details.
 
 set -euo pipefail
 
@@ -166,8 +38,7 @@ while [ $# -gt 0 ]; do
     --users-only) DO_ATTRS=false ;;
     --delete)     DO_DELETE=true; DO_ATTRS=false ;;
     --csv)        CSV="${2:?--csv needs a path}"; shift ;;
-    # Print just the synopsis (down to the "Requires:" line), not the whole
-    # rationale essay in the header.
+    # Print the usage summary through Requires:.
     -h|--help)    sed -n '2,/^# Requires:/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -251,19 +122,9 @@ get_token() {
   ok "admin token" "$(dim "client ${ADMIN_ID:0:8}…")"
 }
 
-# api <METHOD> <PATH> [BODY] -> prints "<body>\n<http_status>"
-#
-# The two APIs this script talks to do NOT share a media type, and getting it
-# wrong is a 406 rather than a helpful error:
-#
-#   /v2.0/Users      SCIM  -> application/scim+json
-#   /v1.0/attributes plain -> application/json
-#
-# The Attributes API rejects scim+json in Accept with "406 Not Acceptable"
-# before it ever looks at the body, so send each endpoint the type it declares.
-# api <METHOD> <PATH> [BODY] [EXTRA_HEADER]
-# EXTRA_HEADER is passed through as one -H. Only create_users() uses it, for the
-# pwdReset header documented in the header of this script.
+# api METHOD PATH [BODY] [EXTRA_HEADER] prints body and status.
+# Users requires application/scim+json; Attributes requires application/json.
+# EXTRA_HEADER is used for the password-reset setting on user creation.
 api() {
   local method="$1" path="$2" body="${3:-}" extra_header="${4:-}"
   local ctype="application/json"
@@ -288,34 +149,10 @@ _split_resp() {
   RESP_BODY="${1%$'\n'*}"
 }
 
-# ==========================================================================
-# 1. Custom attribute definitions
-# ==========================================================================
-# A custom attribute must exist in the TENANT SCHEMA before a user payload may
-# carry it — an undefined attribute fails the create with a validation error
-# rather than being created implicitly. Each definition claims one of the
-# predefined customAttribute1..150 slots.
-#
-# datatype string[] is what keeps these multi-valued. The slot numbers are
-# arbitrary but must be stable: changing one after users exist orphans the
-# stored values.
-#
-# Verify's scimName validator accepts LETTERS ONLY — an underscore or hyphen is
-# rejected with "CSIAI0096E The value <x> is not valid for attribute [scimName]"
-# (a 400 that is NOT an "already exists" 400). So the display name and the
-# scimName have to be allowed to differ: gh_permissions -> ghpermissions.
-#
-# The scimName is the operative one — the CELx claim mappers call
-# user.getCustomValues("<scimName>"), and import-verify-clients.sh resolves it
-# from the tenant rather than assuming name == scimName. Keep this in sync with
-# that script and with verify/README.md.
-#
-# `manager` is deliberately NOT in this list: it is a SCIM relationship, not a
-# custom attribute, and the client's mapper reaches it with getManager() rather
-# than getCustomValues(). Adding it here would claim a slot nothing reads. See
-# the "manager is a SCIM relationship" section in the header and link_managers().
-#
-# Format: displayName:slot:scimName
+# Custom attributes must exist before users reference them.
+# Format: displayName:slot:scimName. Keep slots stable to preserve stored values.
+# scimName accepts letters only, so gh_permissions maps to ghpermissions.
+# manager uses the SCIM relationship and does not need a custom-attribute slot.
 ATTRS=(
   "roles:customAttribute1:roles"
   "permissions:customAttribute2:permissions"
@@ -323,18 +160,10 @@ ATTRS=(
   "gh_permissions:customAttribute4:ghpermissions"
 )
 
-# The SCIM extension that carries the manager reference. Long enough, and used in
-# enough places below, to be worth a name.
+# SCIM extension for the manager relationship.
 ENTERPRISE_SCHEMA="urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"
 
-# --- CSV -> JSON ----------------------------------------------------------
-# Parsed with python3's csv module rather than IFS=, read: it handles quoting
-# and CRLF correctly, and it lets the '##' comment convention in users.csv work.
-# Columns are read BY HEADER NAME, so the CSV stays reorderable and an operator
-# can add a column without touching the field offsets here.
-#
-# Multi-valued cells are pipe-separated (see users.csv), and each list is sent as
-# it reads — no trailing "" pad; see the header comment.
+# Parse CSV by column name, supporting quoting, CRLF, and ## comment lines.
 csv_json() {
   # Build "csvName=scimName,..." from ATTRS so the two never drift apart.
   local entry map=""
@@ -346,17 +175,10 @@ import csv, json, sys
 
 REQUIRED = ["username", "email", "first_name", "last_name", "password"]
 
-# `manager` is optional and single-valued: it names ONE userName, resolved to a
-# SCIM id in a second pass (see link_managers in the shell below). It is not a
-# custom attribute, so it is carried as a plain field rather than through
-# ATTR_MAP — the client mapper returns getManager().userName, a scalar string.
+# manager is a single userName, resolved to a SCIM id in link_managers().
 OPTIONAL = ["manager"]
 
-# Custom attributes, in the order they are emitted. The CSV column keeps the
-# readable name (gh_permissions); the SCIM payload must use the tenant's
-# scimName, which is letters-only (ghpermissions). The map arrives as
-# "csvName=scimName,..." in argv[2] so ATTRS in the shell below stays the single
-# source of truth for that pairing.
+# Map CSV column names to letters-only SCIM names from ATTRS.
 ATTR_MAP = [tuple(pair.split("=", 1)) for pair in sys.argv[2].split(",") if pair]
 
 with open(sys.argv[1], newline="") as fh:
@@ -388,16 +210,11 @@ for i, row in enumerate(reader, start=2):
     attrs = {}
     for name, scim in ATTR_MAP:
         raw = (row.get(name) or "").strip()
-        # Sent unpadded. Verify still serialises a single value as a JSON scalar,
-        # but the engine's `ibmverify` claim-mapper preset now wraps a scalar into
-        # a one-element vec, so array shape no longer has to be forced here. See
-        # the script header.
+        # Send values unpadded; claim_mapper: ibmverify handles scalar claims.
         attrs[scim] = [v.strip() for v in raw.split("|") if v.strip()]
     user["attributes"] = attrs
 
-    # The manager cell names one userName. A pipe here is an operator assuming it
-    # behaves like the multi-valued columns next to it; the reference can hold
-    # exactly one id, so say so rather than silently taking the first.
+    # Reject multiple manager names.
     if "|" in user["manager"]:
         sys.exit(f"row {i}: {user['username']} has multiple managers "
                  f"({user['manager']!r}); the SCIM manager reference holds one "
@@ -407,10 +224,7 @@ for i, row in enumerate(reader, start=2):
                  f"require_approval would ask them to approve themselves")
     out.append(user)
 
-# Managers are resolved by userName against the tenant, but a name that is simply
-# misspelled here would resolve to nothing and be reported as a missing tenant
-# user — misleading when the intended manager is right there in the CSV. Catch
-# the in-file case now, where the row number is still available.
+# Report misspelled in-file manager names with the CSV row number.
 for u in out:
     if u["manager"] and u["manager"] not in seen:
         sys.exit(f"{u['username']}'s manager {u['manager']!r} is not a username "
@@ -443,12 +257,8 @@ scim_payload() {
         password: $u.password,
         "urn:ietf:params:scim:schemas:extension:ibm:2.0:User": {
           userCategory: "regular",
-          # NO emailVerified HERE. This tenant rejects it outright:
-          #   CSIAI0111E The supplied JSON contained an invalid attribute: emailVerified
-          # It is also unnecessary — nothing in the demo exercises an email
-          # round-trip, and the Notification block below (notifyType: NONE) is
-          # what actually stops Verify mailing the clear-text password to
-          # @corp.com, which does not resolve.
+          # Verify rejects emailVerified (CSIAI0111E). Notification.notifyType=NONE
+          # suppresses password emails to the demo addresses.
           twoFactorAuthentication: false,
           customAttributes: ($u.attributes | to_entries
                               | map({ name: .key, values: .value }))
@@ -499,9 +309,7 @@ create_attrs() {
     _split_resp "$(api POST "/v1.0/attributes" "$body")"
     case "$RESP_STATUS" in
       201|200) ok   "$name" "$(dim "defined as $slot (scimName=$scim)")" ;;
-      # Verify returns 400 for an already-defined name as well as for genuine
-      # validation errors, so the message is the only way to tell them apart.
-      # Treat "exists"/"duplicate" as idempotent success and surface the rest.
+      # Distinguish duplicate attributes from validation errors in HTTP 400 responses.
       400|409)
         if printf '%s' "$RESP_BODY" | grep -qiE 'exist|duplicate|already|in use'; then
           warn "$name" "$(dim 'already defined — skipped')"
@@ -509,9 +317,7 @@ create_attrs() {
           fail "$name" "HTTP $RESP_STATUS"
           printf '%s\n' "$RESP_BODY" | jq . 2>/dev/null | sed 's/^/      /' \
             || printf '      %s\n' "$RESP_BODY"
-          # CSIAI0096E on [scimName]/[attributeName] is the letters-only rule,
-          # not a transient failure: no retry will help, the ATTRS entry needs a
-          # letters-only scimName in its third field.
+          # CSIAI0096E requires a letters-only scimName in ATTRS.
           if printf '%s' "$RESP_BODY" | grep -qE 'CSIAI0096E|not valid for attribute'; then
             echo "$(dim "      scimName '$scim' was rejected. Verify allows LETTERS ONLY here —")"
             echo "$(dim "      no '_' or '-'. Set a letters-only scimName in the third field of")"
@@ -534,10 +340,7 @@ create_attrs() {
   done
 }
 
-# ==========================================================================
-# 2. Users
-# ==========================================================================
-# Look up a userName -> id. Used to make create idempotent and to drive --delete.
+# Look up SCIM ids for idempotent creation and deletion.
 find_user_id() {
   local username="$1" filter
   # SCIM filter; the space and quotes must be percent-encoded.
@@ -547,9 +350,7 @@ find_user_id() {
   printf '%s' "$RESP_BODY" | jq -r '.Resources[0].id // empty'
 }
 
-# Users the tenant flagged "must change password at next sign-in". They are
-# created correctly but CANNOT use the password grant until the flag is cleared,
-# and nothing in the SCIM API can clear it. See the note in the header.
+# Track users whose password-reset flag prevents the password grant.
 declare -a NEEDS_PWD_RESET=()
 
 create_users() {
@@ -567,26 +368,20 @@ create_users() {
       continue
     fi
 
-    # The header is what keeps the new user out of "must change password at next
-    # sign-in" — see the pwdReset note in the script header. Nothing in the
-    # PAYLOAD can do this.
+    # Suppress the password-reset flag with the request header.
     _split_resp "$(api POST "/v2.0/Users" "$body" \
                        "usershouldnotneedtoresetpassword: true")"
     case "$RESP_STATUS" in
       201)
         ok "$username" "$(dim "id=$(printf '%s' "$RESP_BODY" | jq -r '.id // "?"')")"
-        # The create response already carries pwdReset, so this costs no extra
-        # call. true means the tenant requires a password change before the
-        # password grant will work — the user exists but cannot mint yet.
+        # Report pwdReset=true so operators can fix users that cannot mint tokens.
         if printf '%s' "$RESP_BODY" | jq -e '
              ."urn:ietf:params:scim:schemas:extension:ibm:2.0:User".pwdReset == true' \
              >/dev/null 2>&1; then
           NEEDS_PWD_RESET+=("$username")
         fi ;;
       409)
-        # Already present. Overwriting a user's attributes is a bigger action
-        # than "import" implies, so report it and let the operator choose
-        # --delete then re-run.
+        # Leave existing users unchanged. Use --delete before reimporting to replace them.
         existing=$(find_user_id "$username" || true)
         warn "$username" "$(dim "exists${existing:+ (id=$existing)} — left unchanged; use --delete to replace")" ;;
       400)
@@ -608,25 +403,8 @@ create_users() {
   done
 }
 
-# ==========================================================================
-# 3. Manager links
-# ==========================================================================
-# A SECOND PASS, run after every user exists, because the manager reference holds
-# the manager's SCIM **id** and that id does not exist until they are created.
-# bob names alice; whether alice happens to be created first is an accident of
-# CSV row order, so this does not depend on it.
-#
-# Written with PATCH op=replace rather than in the create payload: replace is
-# idempotent (it sets the same id on a re-run) and it works on users that already
-# existed, which is the common case when re-running against a live tenant where
-# create returns 409 and changes nothing.
-#
-# The claim this feeds is produced on the CLIENT by the introspection mapper
-#   statements:
-#     - context: manager := user.getManager()
-#     - return: context.manager.userName
-# so what lands here is the relationship; the userName in the token is derived
-# from it by that mapper. A user with no manager gets no link and no claim.
+# Link managers after all users exist, resolving userName to SCIM id.
+# PATCH replace is idempotent; an empty CSV cell removes an existing link.
 declare -a MANAGER_UNLINKED=()
 
 link_managers() {
@@ -648,9 +426,7 @@ link_managers() {
       continue
     fi
 
-    # Both sides resolve by userName. The manager need not be in the CSV, but it
-    # must exist on the tenant — the CSV-internal case is already checked at parse
-    # time, so a failure here means the tenant is missing them.
+    # Managers outside the CSV must already exist on the tenant.
     if ! uid=$(find_user_id "$username") || [ -z "$uid" ]; then
       warn "$username" "$(dim 'not on the tenant — no manager link')"
       MANAGER_UNLINKED+=("$username -> $mgr")
@@ -749,9 +525,7 @@ echo
 if [ "$DRY_RUN" = true ]; then
   echo "$(dim 'Dry run only — nothing was sent to the tenant.')"
 else
-  # Surfaced BEFORE the "verify it end to end" hint, because on a tenant with
-  # this policy those commands cannot succeed yet and the reason is not
-  # discoverable from their error (CSIAQ0267E names no user and no cause).
+  # Report blocked users before printing token-test commands.
   if [ "${#NEEDS_PWD_RESET[@]}" -gt 0 ]; then
     echo "$(yellow 'MUST CHANGE PASSWORD') $(dim '— these users cannot use the password grant yet:')"
     for u in "${NEEDS_PWD_RESET[@]}"; do echo "  $(dim "• $u")"; done

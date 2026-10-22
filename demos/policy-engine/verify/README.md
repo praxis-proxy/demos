@@ -31,11 +31,8 @@ clients that turn their attributes into token claims — using
 | `clients.csv` | The client source — the realm export's four clients, mapped onto Verify |
 | `import-verify-clients.sh` | Creates the applications, their grants, and their claim mappers |
 
-Together these automate requirement **R6** ("documented tenant setup") from
-`docs/brainstorms/2026-08-31-ibm-verify-idp-requirements.md`. Decision **D5**
-kept tenant setup manual; the users, their custom attributes, and the clients'
-claim mappers are the parts where doing it by hand reliably costs the most time,
-and where a mistake surfaces as a policy deny rather than an error.
+Run the user importer before the client importer so application entitlements
+can reference existing SCIM user ids.
 
 ## Quick start
 
@@ -50,9 +47,7 @@ and where a mistake surfaces as a policy deny rather than an error.
 # 3. See what the tenant actually reports before writing to it
 ./verify/import-verify-clients.sh --discover
 
-# 4. Provision — users FIRST, and not only for the claim mappers: the clients
-#    script grants each persona sign-on access by SCIM id, so the users must
-#    exist before the clients are created.
+# 4. Provision users before clients; application entitlements need their SCIM ids.
 ./verify/import-verify-users.sh
 ./verify/import-verify-clients.sh
 
@@ -84,28 +79,21 @@ console step**. Two models:
 | `--all-users` | `birthRightAccess: true` — every user in the tenant, the console's "Automatic access for all users and groups" |
 | `--no-entitle` | Skip it; the script then reports which clients still need access |
 
-Explicit is the default because it matches how this tenant's `praxis-identity-1`
-is already configured, and because the demo's argument rests on four personas
-whose differences matter — a client any tenant user can mint from weakens the
-eve-vs-bob contrast. Use `--all-users` on a throwaway tenant.
+Explicit grants limit access to the demo personas. `--all-users` grants
+application access to every tenant user.
 
 `--discover` prints the current state per application, so you can see who is
 entitled before changing anything.
 
-Note this is **invisible in the application object**: `birthRightAccess` reads
-back as `null` on `GET /v1.0/applications/{id}` — write-only there, the same trap
-as `idTokenSigningAlg` — and the grants live under `/v1.0/owner/...`. Reading an
-application back and diffing it against a working one will not reveal it. `GET`
-on the owner path does.
+Read entitlement state from the owner endpoint. The application object does
+not return it in `birthRightAccess`.
 
-## What the scripts do not do
+## Policy rendering
 
-**They do not edit `policy-verify-opa.yaml` directly** — they do not need to.
-That file is now *generated* from `policy-verify-opa.yaml.tmpl` by
-`render-verify-config.sh`, which substitutes the tenant URL and the exchange
-`client_id` from the environment, defaulting to `post_deploy_variables.json`.
-`restart.sh` renders it automatically on any `*verify*` config, so the ids that
-`import-verify-clients.sh` writes back are picked up with no manual edit.
+`render-verify-config.sh` generates `policy-verify-{opa,cel,cedar}.yaml` from
+the matching templates. `restart.sh` renders the selected variant using tenant
+and exchange-client ids from the environment or `post_deploy_variables.json`.
+Edit the templates; generated files are overwritten.
 
 ```bash
 ./render-verify-config.sh           # render (no-op when up to date)
@@ -113,60 +101,22 @@ That file is now *generated* from `policy-verify-opa.yaml.tmpl` by
 VERIFY_TENANT_URL=https://other.verify.ibm.com ./render-verify-config.sh
 ```
 
-Why a template rather than an env var in the YAML: Praxis has no env-var
-indirection for `client_id`. Only the *secret* does (`client_secret_source:
-{kind: env_var}`); `client_id` is a plain `String` read straight into the
-outbound Basic auth header, so a literal `${VAR}` there would be sent to Verify
-verbatim and fail as `invalid_client` at the token endpoint — well away from the
-cause. Substitution therefore has to happen before the gateway reads the file.
+Praxis reads `client_id` as a literal string, so the renderer substitutes it
+before startup. Client secrets remain runtime environment lookups and are not
+written into generated policies.
 
-The client **secret** is deliberately *not* templated. It stays a runtime lookup
-by the gateway, so a live credential never lands in a rendered file on disk.
+## Claims and CSV format
 
-## Two things worth knowing before editing
+Use `claim_mapper: ibmverify` on `jwt-user` and `jwt-client` to handle Verify's
+scalar role and permission claims. Do not add empty-string padding to user
+attributes or CELx claim mappers. Older tenant clients may still have padded
+mappers; inspect them when re-provisioning. The `jwt-agent` resolver uses
+`standard` because client-credentials tokens carry no user roles or teams.
 
-**The trailing `""` pad is gone — the `ibmverify` claim-mapper preset replaced
-it.** Verify serialises a single-valued custom attribute as a JSON scalar, and
-Praxis's standard claim mapper read `roles`/`teams`/`permissions` via
-`Value::as_array`, which returns `None` for a string — so a one-role persona got
-an empty `subject.roles`, silently, and `require(role.hr)` then failed as a
-*policy deny* rather than a config fault. Both importers worked around it by
-appending a `""`, at the cost of `""` becoming a real set member in audit records
-and `X-Policy-*` output.
-
-The preset wraps a scalar into a one-element vec on the engine side, so nothing
-has to force array shape any more. It is selected by `claim_mapper: ibmverify` on
-the `jwt-user` and `jwt-client` plugins in `policy-verify-opa.yaml.tmpl`.
-(There is now also a `jwt-agent` resolver for scenario 14, but it uses
-`claim_mapper: standard`: an agent token carries no roles/teams/permissions
-for the preset to normalise.)
-
-Claims are now unpadded end to end:
-
-```
-stored on the user   roles: ["engineer"]
-minted in the token  roles: ["engineer"]
-```
-
-Two things to know when re-provisioning. The pad was injected by each client's
-CELx claim mapper, not by the user record — so a tenant whose clients were
-created by an older copy of `import-verify-clients.sh` keeps minting
-`["engineer", ""]` regardless of what `import-verify-users.sh` stores, because
-the mapper rebuilds the array from `getCustomValues()`. **Re-run both importers,
-not just the users one.** And a gateway *without* the preset needs the padding
-back; see git history for the mappers that append it.
-
-**Passwords come from the CSV, not from a rule.** They currently follow
-`<username>Lab3151`, matching `post_deploy_variables.json` so
-`mint-verify-token.sh` works against a freshly provisioned tenant. The importer
-reads the column rather than computing the pattern, because the tenant's actual
-passwords are the source of truth — a provisioner that hands you a
-non-patterned password would otherwise produce a tenant nobody can log into,
-and the failure would surface as a 400 from the ROPC grant, well away from the
-cause.
-
-Columns are read **by header name**, so the CSV can be reordered or extended
-without touching the script. Multi-valued cells are pipe-separated.
+Passwords are read from the CSV. The demo values match
+`post_deploy_variables.json`; keep these consistent for `mint-verify-token.sh`.
+Columns are read by header name. Multi-valued cells use `|` separators.
+`manager` holds one userName, resolved to a SCIM relationship after user creation.
 
 ## Attribute slots
 
@@ -181,22 +131,9 @@ importer claims four of the predefined `customAttribute1..150` slots:
 | `teams` | `customAttribute3` | policy context |
 | `gh_permissions` | `customAttribute4` | scenario 4's exchange (passthrough claim) |
 
-These numbers are arbitrary but must stay stable — changing one after users
-exist orphans the stored values. Note the slots the importer *claims* are not
-the slots the owner's tenant actually uses (it was built by hand first):
-
-| Attribute | Importer | This tenant |
-|---|---|---|
-| `roles` | `customAttribute1` | `customAttribute2` |
-| `permissions` | `customAttribute2` | `customAttribute4` |
-| `teams` | `customAttribute3` | `customAttribute3` |
-| `gh_permissions` | `customAttribute4` | `customAttribute1` |
-
-This is harmless — the attributes already exist, so the importer skips them, and
-claim mapping resolves by `scimName` rather than by slot. It only matters if you
-provision a *fresh* tenant and then expect the slot numbers to match this one.
-The "this tenant" column above is the hand-built `praxis-1`; a tenant the
-importer provisions from scratch (e.g. `praxis-2`) gets the importer's slots.
+Keep attribute slots stable after users exist; changing slots orphans stored
+values. Existing tenants may use different slots. Claim mapping resolves by
+`scimName`, so the slot numbers do not need to match this table.
 
 **`gh_permissions` has `scimName` `ghpermissions`** — no underscore. This is not
 a quirk of one hand-built tenant: Verify's `scimName`/`attributeName` validator
@@ -206,20 +143,11 @@ accepts **letters only**, and rejects anything else with
 400  CSIAI0096E  The value gh_permissions is not valid for attribute [scimName].
 ```
 
-Note that is a 400 *without* the word "exists", so it is not the idempotent
-already-defined case. `import-verify-users.sh` therefore carries the scimName as
-the third field of each `ATTRS` entry (`displayName:slot:scimName`) and uses it
-for both the attribute definition and the `customAttributes` entries in each
-user's SCIM payload — the display name keeps the underscore, the wire never sees
-it. Adding a new attribute whose name is not purely alphabetic means giving it a
-letters-only scimName there.
+Define each `ATTRS` entry as `displayName:slot:scimName`, with a letters-only
+SCIM name. The client importer resolves these names from the tenant for
+`user.getCustomValues()`; `--discover` prints the mapping.
 
-The CELx mappers call `user.getCustomValues("<scimName>")`, so a mapper written
-against the display name yields nothing and scenario 4 loses its permissions
-claim silently. `import-verify-clients.sh` resolves each scimName from the
-tenant rather than assuming; `--discover` prints the mapping.
-
-Two other tenant constraints the importer encodes, both discovered the same way:
+Other constraints:
 
 - **`emailVerified` is not accepted** in the IBM user extension —
   `CSIAI0111E The supplied JSON contained an invalid attribute: emailVerified`.
@@ -246,37 +174,34 @@ The realm export has four clients. Only two are real OAuth clients on Verify:
 The two must stay distinct: Verify refuses to let a client exchange its own
 tokens (`CSIAQ5207E`), the same split the realm export already has.
 
-`github-api` and `workday-api` are **not clients** on Verify — they are audience
-strings in the exchange client's `audiences` list. `clients.csv` registers them
-anyway so the console shows the same four names a viewer sees in Keycloak. and it
-does reproduce Keycloak's per-audience `gh-permissions-as-scope` mapper, which is
-what makes scenario 4's assertion load-bearing there. Nothing in the demo authenticates as either one.
-They cannot be pure placeholders either — Verify rejects an application with every grant type
-disabled (`CSIAQ0032`) — so each carries `clientCredentials` and nothing else.
-Delete those two rows if you would rather the console show only what
-participates; the demo behaves identically.
+`github-api` and `workday-api` serve as audience names. Their CSV rows create
+applications for parity with Keycloak, but no demo request authenticates as
+either one. They enable `clientCredentials` because Verify rejects applications
+with no enabled grant (`CSIAQ0032`).
 
-### Field-level facts, none of them fully documented
+### Client fields
 
-Each was confirmed by creating and deleting a throwaway application on the live
-tenant. They are the reason this script exists rather than a `curl` snippet.
+| Field | Required value or behavior |
+|---|---|
+| `templateId` | Defaults to `998`; use `--discover` to check the tenant. |
+| `providers.oidc.token.accessTokenType` | `jwt` |
+| `providers.oidc.properties.idTokenSigningAlg` | Required for JWT access tokens (`CSIAQ0257`); omitted on GET. |
+| Grant flags | Strings `"true"` / `"false"` |
+| Claim mappers | `{targetName, function: {custom: <CELx>}}` |
+| `sso` | `{userOptions: "oidc"}` |
+| Credentials | Read generated `clientId` / `clientSecret` through `_links.self.href`. |
+| Provisioning entitlement | `manageAppAccessAdmin` |
+| Application access | `POST /v1.0/owner/applications/{id}/entitlements`; explicit SCIM user grants or `birthRightAccess`. |
 
-| Thing | Value | Note |
-|---|---|---|
-| `templateId` | `998` | **Not** `"0001"`, which circulates in examples. No documented enum; `--discover` reads it off the tenant. |
-| JWT tokens | `providers.oidc.token.accessTokenType: "jwt"` | Not `accessTokenFormat`. |
-| JWT signing | `providers.oidc.properties.idTokenSigningAlg` | **Required** when `accessTokenType` is `jwt`, despite the name. Omit it and every create fails `CSIAQ0257`. The GET response omits it, so it cannot be discovered by reading an app back. |
-| Grant types | `"true"` / `"false"` | Quoted strings, not JSON booleans. |
-| Claim mappers | `{ targetName, function: { custom: <CELx> } }` | The API reference describes `JWTAttributeMapBean` as `sourceId` + `targetName`; the working shape is a CELx function calling `user.getCustomValues("<scimName>")`. |
-| `sso` | `{ userOptions: "oidc" }` | Required even for a pure OIDC app; satisfies it without inventing a `domainName`. |
-| Credentials | Not in the `201` response | It returns only `_links.self.href`; `GET` that to read the generated `clientId` / `clientSecret`. |
-| Admin entitlement | `manageAppAccessAdmin` | "Manage application lifecycle". Not `manageApplications`. |
-| Sign-on access | `POST /v1.0/owner/applications/{id}/entitlements` | Separate resource, not an application field. `birthRightAccess` for all users, or `additions[]` with a SCIM `subjectId` per user (`grantType: "BRT"`). Needs `manageAppAccessAdmin` or `manageAppAccessOwner`. |
+Token-exchange clients also need `subjectTokenTypes` and `requestedTokenTypes`
+under `additionalConfig`. DPCM request mapping uses `{name, custom}` entries in
+`tokenRequestMap`; its purpose must already be active. The importer creates a
+draft purpose and publishes it with a versioned PATCH before creating clients.
 
 ## Agent identity (scenario 14)
 
 `import-verify-clients.sh` provisions the agent from the `role=agent` row in
-`clients.csv`. That row produces **two** tenant objects, not one:
+`clients.csv`. That row creates:
 
 1. an application-level OIDC client (`client_credentials`, JWT access token,
    audiences `praxis-gateway` + `github-api`), and
@@ -286,14 +211,12 @@ tenant. They are the reason this script exists rather than a `curl` snippet.
 Ids are written back to `post_deploy_variables.json` as `AGENT_CLIENT_ID`,
 `AGENT_CLIENT_SECRET` and `VERIFY_AGENT_ID`.
 
-Three tenant behaviours the script works around, each verified against a live
-tenant and each silently damaging if you hand-roll this:
+Agent Registry constraints:
 
 - **Create always lands in `UNDER_REVIEW`.** `POST /v1.0/Agents` ignores the
   `status` field — sending `"ACTIVE"` still stores `UNDER_REVIEW`. The importer
   therefore POSTs and then promotes with a PUT, reporting
-  `UNDER_REVIEW promoted to ACTIVE`. Skip the promotion and the gateway denies
-  a freshly provisioned agent for a reason nobody chose.
+  `UNDER_REVIEW promoted to ACTIVE`. The gateway denies agents left under review.
 - **`oauthClients` is write-only.** It is required on write
   (`CSINH2100E` without `issuer`) but always reads back as `null`, even
   immediately after a 201 that accepted it. Do not verify the association by
@@ -305,16 +228,15 @@ tenant and each silently damaging if you hand-roll this:
 
 ### The two agent-status credentials
 
-Agent status is read on the request path and written by an operator, and those
-are deliberately **different credentials**. The importer creates both, each
-holding exactly one entitlement, and appends them to `.env.verify`:
+The importer creates separate reader and operator credentials and saves them
+in `.env.verify`:
 
 | Client | Entitlement | Used by |
 |---|---|---|
 | `praxis-agent-status-reader` | `readAgents` | the **gateway**, per request (agent-status plugin) |
 | `praxis-agent-status-operator` | `manageAgentStatus` | `set-agent-status.sh`, and a human admin |
 
-Neither can do the other's job. Verified against a live tenant:
+The reference tenant permits these operations:
 
 | | reader | operator |
 |---|---|---|
@@ -325,16 +247,9 @@ Neither can do the other's job. Verified against a live tenant:
 | `GET /v1.0/applications` | 403 | 403 |
 | `POST /v1.0/apiclients` | 403 | 403 |
 
-**Why the split rather than one client with both entitlements.** The gateway is
-the component most exposed to agent traffic. If it could also change status, a
-compromised gateway could re-enable the agent its own policy had just
-suspended — the kill switch would be its own bypass. With `readAgents` alone it
-can observe the governance decision and enforce it, but not alter it.
-
-`manageAgentStatus` is itself narrow: per IBM's reference it permits "update
-status only; all other fields must match existing values", which the 403 on a
-rename confirms. So the operator credential cannot quietly re-point the agent
-at a different OAuth client either.
+The reader credential lets the gateway enforce status without being able to
+change it. The operator can change status only; other fields must match the
+existing record.
 
 The admin pair stays **provisioning-only** — nothing on the demo path reads it.
 The importer asserts each client's read-back entitlement list is exactly the
@@ -372,12 +287,10 @@ at its delegate step with:
 CSIAQ0279E Only entitled users can single sign-on to the application.
 ```
 
-while 01-13 pass, because their subjects are real users. That asymmetry is the
-tell.
+The user-based exchange flows can still pass because they have explicit grants.
 
-Scoped deliberately: only the exchange client, and only when an agent exists.
-The minting client keeps its explicit per-persona grants, which is what makes
-"only these four users can sign on" demonstrable. Re-running the importer
+This change applies only to the exchange client when an agent exists.
+The minting client keeps its explicit persona grants. Re-running the importer
 repairs the entitlement on an existing client, so a tenant provisioned before
 the agent existed does not need `--delete`.
 

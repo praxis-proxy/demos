@@ -16,10 +16,7 @@ use crate::{
     VIOLATION_AGENT_SUSPENDED, VIOLATION_REGISTRY_UNAVAILABLE,
 };
 
-/// Outcome of consulting the registry, before it becomes a `PluginResult`.
-///
-/// Separated from the HTTP fetch so the decision is testable without a tenant:
-/// everything security-relevant is a pure function of this value.
+/// Registry lookup result used by the authorization decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StatusLookup {
     /// The registry answered with this status string.
@@ -62,8 +59,7 @@ impl AgentStatusChecker {
                 config.name
             ),
         })?;
-        // Read now, not per request: a missing secret is a startup fault, and
-        // discovering it on the first agent call would present as a denial.
+        // Validate the secret at startup.
         let admin_client_secret = std::env::var(&typed.admin_client_secret_env).map_err(|_| {
             PluginError::Config {
                 message: format!(
@@ -90,12 +86,7 @@ impl AgentStatusChecker {
         })
     }
 
-    /// Turns a lookup into an allow/deny decision.
-    ///
-    /// Pure, so every branch that matters is unit-testable. Note that only an
-    /// exact match on the required status allows: an unrecognized status
-    /// string denies rather than being treated as benign, because a status
-    /// this plugin does not understand is not a status it can vouch for.
+    /// Allow only an exact match with required_status. Unknown statuses deny.
     pub fn decide(&self, lookup: &StatusLookup) -> Decision {
         match lookup {
             StatusLookup::Known(s) if s == &self.typed.required_status => Decision::Allow,
@@ -155,9 +146,7 @@ impl HookHandler<CmfHook> for AgentStatusChecker {
         _ctx: &mut PluginContext,
     ) -> PluginResult<MessagePayload> {
         let Some(agent_id) = self.agent_id(ext) else {
-            // No id means nothing to ask the registry about. Denying is the
-            // only safe reading: the route asked for this check, so letting the
-            // call through would silently skip governance.
+            // Deny when no registry id is available.
             return PluginResult::deny(PluginViolation::new(
                 VIOLATION_REGISTRY_UNAVAILABLE,
                 "no agent id available (absent from the subject's claims and from \
@@ -170,8 +159,7 @@ impl HookHandler<CmfHook> for AgentStatusChecker {
             Some(status) => StatusLookup::Known(status),
             None => {
                 let fetched = self.client.fetch_status(ext, &agent_id).await;
-                // Only a real answer is cached. A failure is retried next call
-                // rather than pinned for the TTL.
+                // Cache successful lookups only.
                 if let StatusLookup::Known(ref s) = fetched {
                     self.cache.put(s.clone());
                 }
@@ -189,15 +177,7 @@ impl HookHandler<CmfHook> for AgentStatusChecker {
 }
 
 impl AgentStatusChecker {
-    /// The agent's registry id: from the resolved subject's claims when the
-    /// token carries one, else from config.
-    ///
-    /// Config is the normal path today. An IBM Verify `client_credentials`
-    /// token carries `sub`/`client_id` (the OAuth client) but no claim naming
-    /// the Agent Registry record, and the association is held registry-side
-    /// where `oauthClients` is write-only — so it cannot be resolved by lookup
-    /// either. The claim is read first anyway, so a tenant that starts issuing
-    /// one needs no code change.
+    /// Use the registry id from subject claims, falling back to configuration.
     fn agent_id(&self, ext: &Extensions) -> Option<String> {
         let from_claim = ext
             .security
@@ -263,8 +243,6 @@ mod tests {
         );
     }
 
-    /// The whole point of the feature: the tenant still issues the token, so
-    /// this is the only thing standing between a suspended agent and the tool.
     #[test]
     fn suspended_denies_with_the_agent_suspended_code() {
         let c = checker(serde_json::json!({}));
@@ -286,7 +264,6 @@ mod tests {
         assert_eq!(deny_code(&d), VIOLATION_AGENT_SUSPENDED);
     }
 
-    /// A status the plugin has never heard of is not a status it can vouch for.
     #[test]
     fn unrecognized_status_denies_rather_than_passing() {
         let c = checker(serde_json::json!({}));
@@ -305,8 +282,7 @@ mod tests {
         assert!(reason.contains("ACTIVE"), "names required: {reason}");
     }
 
-    /// Fail-closed by default, and under a DISTINCT code: a tenant outage must
-    /// not be reported as a governance decision.
+    /// Report lookup failure separately from an inactive agent.
     #[test]
     fn unavailable_denies_by_default_under_its_own_code() {
         let c = checker(serde_json::json!({}));

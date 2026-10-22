@@ -1,20 +1,9 @@
 #!/usr/bin/env bash
-# Mint an access token for a demo persona by hitting IBM Verify
-# direct password-grant endpoint. Echoes the raw JWT on stdout.
 #
-# Usage:
-#   ./mint-verify-token.sh alice       # prints alice's user token
-#   ./mint-verify-token.sh hr-copilot  # prints the hr-copilot client's
-#                                      # service-account token (used as
-#                                      # the gateway-Authorization)
-#
-# Personas:
-#   alice    — engineer, role=engineer,  perms=[tool_execute]
-#   bob      — HR, role=hr, perms=[tool_execute, view_ssn, pii_access, email_send]
-#   charlie  — auditor, role=auditor, perms=[tool_execute, pii_access]
-#   eve      — HR, role=hr, perms=[tool_execute]   (NO view_ssn)
-#
-# Requires `jq`.  
+# Print an IBM Verify access token for alice, bob, charlie, eve, or hr-copilot.
+# Usage: ./mint-verify-token.sh <persona>
+# Uses password grant for people and client_credentials for hr-copilot.
+# Requires curl, jq, and post_deploy_variables.json.
 
 set -euo pipefail
 post_deploy_variables="post_deploy_variables.json"

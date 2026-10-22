@@ -1,248 +1,28 @@
 #!/usr/bin/env bash
-# Provision the demo's OAuth clients into an IBM Verify tenant from
-# verify/clients.csv, using keycloak/realm-export.json as the model.
 #
-# Sibling of import-verify-users.sh: that script creates the four personas, this
-# one creates the clients that turn their attributes into token claims. RUN THE
-# USER IMPORTER FIRST — the default entitlement model grants each persona
-# sign-on access by SCIM id, so the users must already exist. Together
-# they close decision D5 in
-# docs/brainstorms/2026-08-31-ibm-verify-idp-requirements.md ("tenant setup is
-# documented, not automated") — this half is the part verify/README.md still
-# listed as manual: "It also does not create the two OAuth clients, enable ROPC,
-# or set the JWT access-token format."
+# Provision Verify OAuth clients, consent purpose, and optional Agent Registry
+# records from clients.csv. Run import-verify-users.sh first.
 #
 # Usage:
-#   ./import-verify-clients.sh                  # create the clients
-#   ./import-verify-clients.sh --dry-run        # print the payloads, send nothing
-#   ./import-verify-clients.sh --discover       # show tenant facts, create nothing
-#   ./import-verify-clients.sh --csv other.csv  # a different client source
-#   ./import-verify-clients.sh --no-write-back  # do not touch post_deploy_variables.json
-#   ./import-verify-clients.sh --all-users      # entitle ALL tenant users, not just the personas
-#   ./import-verify-clients.sh --no-entitle     # skip entitlement entirely
-#   ./import-verify-clients.sh --no-purpose     # do not create the DPCM consent purpose
-#   ./import-verify-clients.sh --delete         # remove the CSV's clients
+#   ./import-verify-clients.sh [--csv other.csv]
+#   ./import-verify-clients.sh --dry-run         # print payloads
+#   ./import-verify-clients.sh --discover        # inspect tenant configuration
+#   ./import-verify-clients.sh --no-write-back   # leave deployment variables unchanged
+#   ./import-verify-clients.sh --all-users       # tenant-wide application entitlement
+#   ./import-verify-clients.sh --no-entitle      # preserve managed entitlements
+#   ./import-verify-clients.sh --no-purpose      # skip DPCM purpose creation
+#   ./import-verify-clients.sh --delete
 #
-# Requires: curl, jq, python3 (CSV parsing only — no third-party packages).
+# Requires: curl, jq, python3, and manageAppAccessAdmin on the provisioning client.
+# Credentials come from VERIFY_ADMIN_CLIENT_ID/_SECRET in .env.verify; the tenant
+# URL comes from post_deploy_variables.json. Generated credentials are saved
+# there and in .env.verify. See verify/README.md for setup.
 #
-# ---------------------------------------------------------------------------
-# The admin API client needs one more entitlement than the user importer
-# ---------------------------------------------------------------------------
-# The Applications API is entitlement-gated per endpoint, like the Users API:
-#
-#   manageAppAccessAdmin  ("Manage application lifecycle")  -> POST/GET/DELETE
-#                                                              /v1.0/applications
-#
-# import-verify-users.sh needs manageUsers + manageAttributes. If you built that
-# admin client already, ADD manageAppAccessAdmin to it — a 403 here with a valid
-# token means exactly that entitlement is missing. Credentials come from
-# .env.verify (gitignored) as VERIFY_ADMIN_CLIENT_ID / VERIFY_ADMIN_CLIENT_SECRET.
-#
-# ---------------------------------------------------------------------------
-# Five field-level facts, all confirmed against a live tenant
-# ---------------------------------------------------------------------------
-# These are the things that cost time to discover; the API reference documents
-# none of them completely. Each was verified by creating and deleting a throwaway
-# application on praxis-1.verify.ibm.com.
-#
-# 1. templateId is "998", not "0001". "0001" circulates in community examples
-#    and is wrong here; every custom OIDC app on the tenant uses 998. There is
-#    no documented enum, so --discover reads the value off the tenant's own
-#    applications rather than trusting this default.
-#
-# 2. accessTokenType (NOT accessTokenFormat) selects JWT, and setting it to
-#    "jwt" REQUIRES a signing algorithm or the create fails with:
-#      CSIAQ0257 A JSON Web Token (JWT) access token type requires one of the
-#                following signing algorithms: [RS256, ...]
-#    The field that satisfies it is providers.oidc.properties.idTokenSigningAlg.
-#    That name reads like it should only govern the ID token; it does not, and
-#    the GET response omits it entirely, so you cannot discover it by reading an
-#    existing app back. Without it every create 400s.
-#
-# 3. Grant types are the STRINGS "true"/"false", not JSON booleans.
-#
-# 3a. Enabling grantTypes.tokenExchange REQUIRES subjectTokenTypes, or the
-#    create fails with:
-#      CSIAQ0377 At least one subject token type is required.
-#    It lives at providers.oidc.properties.additionalConfig.subjectTokenTypes
-#    (the same additionalConfig that carries useUserDefaultEntitlements), NOT
-#    under providers.oidc.token where the other token settings are. Unlike
-#    idTokenSigningAlg it DOES read back on GET, so --discover can show it.
-#    The tenant supplies no default: an app with tokenExchange off reads back
-#    with the field absent entirely. Set alongside it is requestedTokenTypes,
-#    the mirror field for what the exchange may mint.
-#
-# 4. Claim mappers are CELx functions, not sourceId references. The API
-#    reference describes providers.oidc.token.attributeMappings[] as
-#    JWTAttributeMapBean requiring `sourceId` + `targetName`, which implies
-#    mapping by attribute ID. The tenant's working clients use a different and
-#    undocumented shape — { targetName, function: { custom: <CELx> } } — and
-#    that CELx calls user.getCustomValues(<scimName>). See below.
-#
-# 5. The CONSENT request mapping is a DIFFERENT and flatter shape than the
-#    claim mappers in 4, which is the easy mistake here. It lives at
-#    providers.oidc.properties.additionalConfig.tokenRequestMap[] and its
-#    entries are { name, custom } — the CELx sits directly on the entry, with
-#    NO `function` wrapper and no `targetName`. `name` is the request PARAMETER
-#    being rewritten ("scope"), not a claim.
-#
-#    The tenant runs consentType "dpcm" (Data Privacy & Consent Management),
-#    so an exchange that narrows a token to an `audience` needs a consent
-#    grant for that audience. The mapping prepends an auto-granted purpose
-#    naming the requested audience onto the request's scope, then concatenates
-#    the real scope and authorization_details so nothing is lost. autoGrant
-#    keeps it non-interactive; the purpose id must match the `purpose=` that
-#    verify-ibm-verify-token-exchange.sh sends (P4AUD —
-#    VERIFY_CONSENT_PURPOSE_ID overrides both the payload and the --discover
-#    check). Confirmed on praxis-2: praxis-gateway, the only token-exchange
-#    client, is the only one of five applications carrying the field, so the
-#    script sets it only when token_exchange is on. consentType itself is
-#    tenant-wide and NOT managed here — --discover reports it.
-#
-# 4a. ...and the purpose must EXIST before the client that grants it
-#
-#    The tokenRequestMap names a purpose id; it does not define one. The purpose
-#    is a separate tenant resource under a DIFFERENT API base
-#    (/config/v1.0/privacy/purposes, not /v1.0/...), and this script now creates
-#    it — it was the last piece of tenant setup left manual, and its absence is
-#    hard to diagnose: the clients all create cleanly and the failure surfaces
-#    only at exchange time, from DPCM, as a consent error.
-#
-#    Two things about that API are worth knowing before editing it:
-#
-#      - POST always creates a DRAFT. The payload's `state` is ignored on
-#        create: the purpose reads back state=0/version=0/hasDraft=true, and a
-#        draft cannot be consented against. Publishing is a PATCH of the
-#        VERSIONED resource:
-#
-#          PATCH /config/v1.0/privacy/purposes/<id>/<version>
-#          {"op": "replace", "path": "state", "value": 1}
-#
-#        Three dead ends worth not repeating, all seen on a live tenant: a PUT
-#        or PATCH of the UNVERSIONED item means "create/update a draft", so it
-#        fails 403 CSIBT0024E ("Only one draft version for purpose is allowed")
-#        once a draft exists; state:1 in a PUT body is accepted (204) and
-#        silently does nothing; and `path` is the bare "state", not "/state"
-#        (CSIBT0026E) with the body a single object, not an RFC 6902 array.
-#        So create is POST-then-PATCH, and create_purpose() re-reads afterwards
-#        to confirm an activeVersion rather than trusting the 201.
-#      - A wrong path under this base returns HTTP 200 with an HTML
-#        login-redirect body, not a 404. api_dpcm() therefore sniffs the body and
-#        maps that to a synthetic 000; without it a typo reads as success.
-#
-#    An existing ACTIVE purpose is left untouched — republishing bumps the
-#    version and invalidates consents already granted against it. A leftover
-#    draft is published rather than reported as present. --no-purpose skips the
-#    whole step; --delete removes the purpose after the clients, since it cannot
-#    go while something still references it.
-#
-#    Mirrored from P4AUD as praxis-2 defines it: description "support
-#    request-scoped aud", defaultConsentDuration 365, tags request|aud|scope,
-#    category default, accessTypes [default], no attributes. Each is overridable
-#    (VERIFY_CONSENT_PURPOSE_*) so a tenant with its own wording does not need an
-#    edit here.
-#
-# ---------------------------------------------------------------------------
-# THE EMPTY-STRING PADDING IS GONE — it used to live HERE, not in the user data
-# ---------------------------------------------------------------------------
-# Historical note, because this pad is described in several places and it matters
-# which one actually minted it. The mappers below used to append `+ ['']`:
-#
-#   The tenant stored alice's roles as ["engineer"] — UNPADDED.
-#   Her minted token carried  roles: ["engineer", ""] — PADDED.
-#
-# The pad was CLIENT config, injected by the CELx mapper, never in the SCIM user
-# record. It existed because Praxis's standard claim mapper read
-# roles/teams/permissions via Value::as_array (claim_map.rs:222,248), which
-# returns None for a JSON scalar — so a single-valued persona got an EMPTY
-# subject.roles, require(role.hr) failed, and it presented as a policy deny
-# rather than the config fault it was. The accepted cost was that "" became a
-# real set member and appeared in audit records and X-Policy-* output.
-#
-# The `ibmverify` claim-mapper preset fixes it at the source: it wraps a JSON
-# scalar into a one-element vec before the structured fields are read. The policy
-# selects it with `claim_mapper: ibmverify` on jwt-user and jwt-client
-# (policy-verify-opa.yaml.tmpl), so SET_CEL below no longer pads.
-#
-# Two consequences. Clients created by an OLDER copy of this script still carry
-# padded mappers on the tenant — re-run this script to overwrite them, since the
-# mapper is what rebuilds the array. And pointing a gateway WITHOUT the preset at
-# unpadded mappers reintroduces the silent-empty-roles failure.
-#
-# ONE CLAIM WAS ALWAYS EXEMPT: `manager`. It is not a custom attribute at all — it is the
-# SCIM EnterpriseUser manager relationship, mapped with getManager().userName,
-# which yields a scalar string. Its consumer is
-# require_approval(from: claim.manager) in policy-verify-opa.yaml, which passes
-# the value to CIBA as the login_hint naming the human approver, so padding it
-# would break exactly what the pad exists to protect. See MANAGER_CEL below.
-#
-# ---------------------------------------------------------------------------
-# getCustomValues() takes the scimName, which is not always the display name
-# ---------------------------------------------------------------------------
-# The CELx calls user.getCustomValues("<scimName>"). On this tenant the
-# gh_permissions attribute has scimName "ghpermissions" — no underscore — so a
-# mapper written against the display name silently yields no values, and
-# scenario 4's exchange loses its permissions claim with no error anywhere.
-#
-# This script therefore RESOLVES each claim's scimName from /v1.0/attributes at
-# run time instead of assuming name == scimName. Run --discover to see the
-# mapping it will use.
-#
-# ---------------------------------------------------------------------------
-# Application entitlement — the step that makes ROPC actually work
-# ---------------------------------------------------------------------------
-# Creating the application is NOT sufficient to mint. A client with correct
-# grants, JWT tokens and claim mappers still rejects every password grant with:
-#
-#   CSIAQ0279E Only entitled users can single sign-on to the application.
-#              You must request for application access.
-#
-# Application entitlement is a SEPARATE resource, not a field on the application:
-#
-#   POST /v1.0/owner/applications/{id}/entitlements
-#   { "birthRightAccess": <bool>, "requestAccess": <bool>,
-#     "additions": [ { "assignee": {"subjectId": <scim id>,
-#                                   "subjectType": "user"},
-#                      "grantType": "BRT" } ] }
-#
-# Entitlement: manageAppAccessAdmin (which this script already needs) or
-# manageAppAccessOwner. GET on the same path reads the current state back.
-#
-# This is why it cannot be found by diffing application JSON: `birthRightAccess`
-# reads back as null on GET /v1.0/applications/{id} — write-only there, the same
-# trap as idTokenSigningAlg — and the grants live under /v1.0/owner/... instead.
-#
-# TWO ACCESS MODELS, both verified on the live tenant:
-#
-#   explicit (default here)  birthRightAccess=false + one addition per persona.
-#                            Only the named users may sign on. This is how the
-#                            owner's praxis-identity-1 is already configured
-#                            (alice, bob, charlie, eve, each grantType BRT).
-#                            Verified: alice mints, bob is denied.
-#
-#   birthright (--all-users) birthRightAccess=true. Every user in the tenant is
-#                            entitled by default — the console's "Automatic
-#                            access for all users and groups". Fewer calls, no
-#                            SCIM lookups, but it grants tenant-wide.
-#
-# Explicit is the default because it matches both the existing tenant and the
-# demo's own argument: four personas whose differences are the point. A client
-# any user can mint from undercuts eve-vs-bob. Use --all-users on a throwaway
-# tenant where that does not matter.
-#
-# BOTH role=mint AND role=exchange need this. The exchange was long assumed not
-# to, on the reasoning that nobody ever authenticates to it — but an RFC 8693
-# exchange carries the SUBJECT's identity, and Verify checks that user's
-# entitlement against the exchange application too. Without it the mint leg
-# succeeds and the exchange leg fails with CSIAQ0279E, which reads like a
-# token-exchange feature problem rather than an entitlement one.
-#
-# Verified: the reference tenant's working praxis-sts-1 carries
-# birthRightAccess=true; a freshly created one with no entitlement is denied,
-# and granting the four personas makes the exchange succeed immediately.
-#
-# role=audience genuinely needs none: those are audience strings, and nothing
-# ever presents a user to them.
+# JWT clients require idTokenSigningAlg. Token-exchange clients require
+# application entitlement for their subjects.
+# 3a. Set subjectTokenTypes and requestedTokenTypes under additionalConfig.
+# DPCM exchanges require an active purpose, published before clients
+# reference it. --discover reports tenant-specific template and attribute names.
 
 set -euo pipefail
 
@@ -254,9 +34,7 @@ DRY_RUN=false
 DO_DELETE=false
 DISCOVER_ONLY=false
 WRITE_BACK=true
-# Entitlement model for role=mint clients. Explicit per-user grants by default;
-# --all-users switches to tenant-wide birthright access. --no-entitle skips it
-# entirely for a tenant that manages application access out of band.
+# Explicit user grants by default; --all-users selects birthright access.
 ALL_USERS=false
 DO_ENTITLE=true
 # The DPCM purpose the exchange client auto-grants. Created before the clients;
@@ -270,9 +48,7 @@ SIGNING_ALG="${VERIFY_ACCESS_TOKEN_SIGNING_ALG:-RS256}"
 # app_payload). Must match the `purpose=` that
 # verify-ibm-verify-token-exchange.sh sends on the exchange call.
 CONSENT_PURPOSE_ID="${VERIFY_CONSENT_PURPOSE_ID:-P4AUD}"
-# The purpose is a tenant resource in its own right, created before the clients
-# that reference it (see "the purpose must exist first" in the header). These
-# mirror P4AUD as praxis-2 defines it; --discover reports any drift.
+# Purpose defaults; --discover reports tenant values.
 CONSENT_PURPOSE_NAME="${VERIFY_CONSENT_PURPOSE_NAME:-$CONSENT_PURPOSE_ID}"
 CONSENT_PURPOSE_DESC="${VERIFY_CONSENT_PURPOSE_DESC:-support request-scoped aud}"
 # Days a granted consent stays valid. 365 is the tenant's value; DPCM requires
@@ -295,8 +71,7 @@ while [ $# -gt 0 ]; do
     --no-purpose)    DO_PURPOSE=false ;;
     --csv)           CSV="${2:?--csv needs a path}"; shift ;;
     --template-id)   TEMPLATE_ID="${2:?--template-id needs a value}"; shift ;;
-    # Print just the synopsis (down to the "Requires:" line), not the whole
-    # rationale essay in the header.
+    # Print the usage summary through Requires:.
     -h|--help)       sed -n '2,/^# Requires:/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -401,10 +176,7 @@ _split_resp() {
   RESP_BODY="${1%$'\n'*}"
 }
 
-# --- CSV -> JSON ----------------------------------------------------------
-# Parsed with python3's csv module rather than IFS=, read: it handles quoting
-# and CRLF correctly, and it lets the '##' comment convention in clients.csv
-# work. Columns are read BY HEADER NAME, so the CSV stays reorderable.
+# Parse CSV by column name, supporting quoting, CRLF, and ## comment lines.
 csv_json() {
   python3 - "$CSV" <<'PY'
 import csv, json, sys
@@ -447,10 +219,7 @@ for i, row in enumerate(reader, start=2):
     for k in LISTS:
         raw = (row.get(k) or "").strip()
         c[k] = [v.strip() for v in raw.split("|") if v.strip()]
-    # Verify rejects an application with every grant type disabled:
-    #   CSIAQ0032 Grant type information is required.
-    # Catch it here so the message names the row rather than surfacing as a raw
-    # API error four requests later.
+    # Reject rows with no enabled grant (CSIAQ0032).
     if not any(c[k] for k in FLAGS):
         sys.exit(f"row {i}: {c['name']!r} enables no grant type, which Verify "
                  f"rejects (CSIAQ0032). Even a placeholder needs one — "
@@ -470,58 +239,20 @@ PY
 CLIENTS_JSON="$(csv_json)" || die "failed to parse $CSV"
 CLIENT_COUNT=$(printf '%s' "$CLIENTS_JSON" | jq 'length')
 
-# --- claim mappers --------------------------------------------------------
-# The CELx body for one set-valued claim. %s is the scimName that
-# user.getCustomValues() looks up — NOT necessarily the display name.
-#
-# This used to append `+ ['']` to force array shape at N=1. The `ibmverify`
-# claim-mapper preset now wraps a scalar into a one-element vec on the engine
-# side, so the pad is gone — see the header. The null guard stays: an attribute
-# the user simply does not have yields null, and the claim should be [] rather
-# than absent.
+# Set-valued claim mapper. %s is the SCIM attribute name.
+# Return [] for missing attributes; claim_mapper: ibmverify handles scalar values.
 SET_CEL='statements:
   - context: values := user.getCustomValues("%s")
   - context: "safeValues := context.values == null ? [] : context.values"
   - return: context.safeValues'
 
-# ---------------------------------------------------------------------------
-# `manager` is mapped from a RELATIONSHIP, not from a custom attribute
-# ---------------------------------------------------------------------------
-# Every claim above reads a custom attribute through getCustomValues(). `manager`
-# does not, and cannot: on this tenant it is the standard SCIM EnterpriseUser
-# manager reference, whose stored value is the manager's SCIM **id**. The mapper
-# therefore traverses the reference and reads the userName off the user it
-# resolves to:
-#
-#   statements:
-#     - context: manager := user.getManager()
-#     - return: context.manager.userName
-#
-# Three things follow, all of which make it unlike the mappers above:
-#
-#   - It takes NO scimName. The %s-style substitution the others use does not
-#     apply, so this is a literal, not a printf template.
-#   - It returns a SCALAR string ("alice"), which is what
-#     require_approval(from: claim.manager) in policy-verify-opa.yaml needs — it
-#     hands the value to CIBA as the login_hint naming the human approver. An
-#     array ["alice"] would be unusable there, which is why this claim is mapped
-#     by MANAGER_CEL and never went through the set mapper.
-#   - There is nothing to resolve or validate against /v1.0/attributes, so
-#     resolve_scim_names() skips it. A missing manager RELATIONSHIP is a user-data
-#     problem that import-verify-users.sh reports, not a mapper problem.
-#
-# Verified on the live tenant: bob's record carries
-#   enterprise:2.0:User.manager = { value: "<alice's id>", $ref: ... }
-# and the tenant's own manager_uid attribute is sourced from that same
-# manager.value — confirming the relationship is the source of truth.
+# Read the manager relationship as a scalar userName for CIBA login_hint.
+# This mapper takes no SCIM attribute name.
 MANAGER_CEL='statements:
   - context: manager := user.getManager()
   - return: context.manager.userName'
 
-# Claims mapped from something other than a custom attribute, with the CELx each
-# one uses. Keep in sync with import-verify-users.sh, which sets the relationship
-# these read: that script decides what is STORED, this one what reaches the
-# TOKEN, and a disagreement means the data is right and the claim is wrong.
+# Relationship claims use dedicated mappers and skip attribute-name lookup.
 RELATIONSHIP_CLAIMS=" manager "
 
 is_relationship_claim() {
@@ -548,20 +279,14 @@ scim_name_for() {
       [ "${entry%%=*}" = "$claim" ] && { printf '%s' "${entry#*=}"; return 0; }
     done
   fi
-  # Unresolved. On a real run resolve_scim_names() has already made this fatal,
-  # so this is the --dry-run path: use the display name, which is correct for
-  # every claim whose scimName matches it, and is reported as an assumption.
+  # Dry-run fallback: use the display name when tenant discovery is unavailable.
   printf '%s' "$claim"
 }
 
-# Read /v1.0/attributes once and record each claim's scimName. A claim whose
-# attribute does not exist is fatal: the mapper would be created successfully
-# and then silently yield nothing, which surfaces as a policy deny.
+# Resolve SCIM names from /v1.0/attributes; fail if a required attribute is absent.
 resolve_scim_names() {
   local claims attrs_json
-  # Relationship claims (manager) are excluded: they are not custom attributes,
-  # so /v1.0/attributes has no entry for them and the not-found branch below
-  # would kill an otherwise correct run.
+  # Exclude relationship claims from custom-attribute lookup.
   claims=$(printf '%s' "$CLIENTS_JSON" | jq -r --arg rel "$RELATIONSHIP_CLAIMS" '
     ($rel | split(" ") | map(select(. != ""))) as $skip
     | [.[].claims[]] | unique | map(select(. as $c | $skip | index($c) | not)) | .[]')
@@ -574,9 +299,7 @@ resolve_scim_names() {
   local claim scim
   while IFS= read -r claim; do
     [ -n "$claim" ] || continue
-    # The endpoint returns a bare array on this tenant; tolerate a wrapped
-    # shape too so a differently-versioned tenant does not silently resolve
-    # every claim to its fallback.
+    # Accept both bare and wrapped attribute arrays.
     scim=$(printf '%s' "$attrs_json" | jq -r --arg n "$claim" '
       (if type == "array" then . else (._embedded.attributes // .attributes // []) end)
       | map(select(.name == $n))
@@ -600,9 +323,7 @@ app_payload() {
 
   while IFS= read -r claim; do
     [ -n "$claim" ] || continue
-    # A relationship claim (manager) is mapped by traversal and takes no
-    # scimName; everything else reads a custom attribute through the set
-    # mapper. See RELATIONSHIP_CLAIMS.
+    # Relationship claims use literal CELx; custom claims use the set mapper.
     if is_relationship_claim "$claim"; then
       cel="$(relationship_cel "$claim")"
     else
@@ -631,9 +352,7 @@ app_payload() {
         applicationState: true,
         description: ("Policy-engine demo (" + $c.role + ") — created by verify/import-verify-clients.sh from keycloak/realm-export.json"),
         providers: {
-          # `sso` is required even for a pure OIDC app. userOptions:"oidc" is
-          # what the tenant'"'"'s own working clients carry, and it satisfies the
-          # requirement without inventing a domainName.
+          # Custom OIDC applications require sso.userOptions=oidc.
           sso: { userOptions: "oidc" },
           oidc: {
             properties: {
@@ -652,77 +371,23 @@ app_payload() {
               # Unused by the demo (no browser leg) but Verify wants the field
               # present; matches what the tenant'"'"'s working clients carry.
               redirectUris: ["https://localhost:8443"],
-              # REQUIRED whenever accessTokenType is "jwt", despite the name
-              # suggesting it only governs the ID token. Omit it and every
-              # create fails with CSIAQ0257. See the script header.
+              # JWT access tokens require idTokenSigningAlg (CSIAQ0257).
               idTokenSigningAlg: $alg,
               doNotGenerateClientSecret: false,
               additionalConfig: ({
-                # Without this, ROPC on a freshly created client fails with
-                #   CSIAQ0279E Only entitled users can single sign-on to the
-                #              application. You must request for application access.
-                # even though the client, its grants and its mappers are all
-                # correct — Verify gates sign-on on per-user application
-                # entitlement. `true` means "every user in the tenant may use
-                # this client", which is what the demo minting client needs and
-                # what the tenant version already carries.
-                #
-                # Scoped to the minting client: this flag is about the
-                # interactive sign-on default, and only role=mint is signed in
-                # to directly. The exchange client needs application
-                # ENTITLEMENT (granted separately, below) but not this default
-                # — the audience placeholders need neither.
+                # Enable application entitlement for mint and exchange subjects (CSIAQ0279E).
+                # Grants are managed separately under /v1.0/owner/applications/{id}/entitlements.
                 useUserDefaultEntitlements: ($c.role == "mint")
-                # Enabling the tokenExchange grant makes these REQUIRED; without
-                # subjectTokenTypes the create fails with:
-                #   CSIAQ0377 At least one subject token type is required.
-                # It is the token type the exchange ACCEPTS as its subject_token,
-                # and it has no default — github-api, whose tokenExchange is off,
-                # reads back with the field absent, so the tenant does not fill
-                # it in. Hence set it only when the grant is on.
-                #
-                # requestedTokenTypes is the mirror field (what the exchange may
-                # MINT). The working praxis-sts-1 on the reference tenant carries
-                # both, each holding just access_token — exactly what
-                # verify-ibm-verify-token-exchange.sh sends as
-                # subject_token_type and expects to get back.
+                # Token exchange requires subjectTokenTypes and requestedTokenTypes under
+                # additionalConfig. A missing subjectTokenTypes fails with CSIAQ0377.
               }
               + (if $c.token_exchange then {
                   subjectTokenTypes:   ["urn:ietf:params:oauth:token-type:access_token"],
                   actorTokenTypes:   ["urn:ietf:params:oauth:token-type:access_token"],
                   requestedTokenTypes: ["urn:ietf:params:oauth:token-type:access_token"],
-                  # Consent request mapping. The tenant runs consentType "dpcm"
-                  # (Data Privacy & Consent Management), so an exchange that
-                  # narrows a token to an `audience` needs a matching consent
-                  # grant for that audience or DPCM has nothing to approve.
-                  # This rewrites the request'"'"'s `scope` to PREPEND a purpose
-                  # entry naming the requested audience, then concatenates the
-                  # real scope and authorization_details so nothing is dropped.
-                  #
-                  # Three things to know about the shape:
-                  #
-                  #  - Entries are FLAT { name, custom } — the `custom` CELx sits
-                  #    directly on the entry. This is NOT the attributeMappings
-                  #    shape ({ targetName, function: { custom } }); reusing that
-                  #    one here silently maps nothing.
-                  #  - `name` is the request parameter being rewritten ("scope"),
-                  #    not a claim name.
-                  #  - The ternary guard matters: requestContext.getValue(
-                  #    "audience") is "" on a plain client_credentials call, and
-                  #    emitting a purpose with an empty audience makes DPCM
-                  #    reject the request. Empty audience -> no purpose entry.
-                  #
-                  # autoGrant:true is what keeps the demo non-interactive: the
-                  # purpose is granted as part of the exchange instead of
-                  # queueing an approval. P4AUD is the tenant'"'"'s purpose id, and
-                  # is the same value verify-ibm-verify-token-exchange.sh sends
-                  # as `purpose=P4AUD` on the exchange call — the two must agree.
-                  #
-                  # Scoped to token_exchange clients: the audience placeholders
-                  # and the minting client never narrow by audience, so a
-                  # tokenRequestMap on them would be inert config. Confirmed
-                  # against praxis-2, where praxis-gateway is the only one of the
-                  # five applications carrying this field.
+                  # For DPCM consent, prepend an auto-granted purpose for the requested audience.
+                  # Preserve scope and authorization_details. Purpose id must match the exchange
+                  # request. tokenRequestMap entries are {name, custom}, with no function wrapper.
                   tokenRequestMap: [
                     {
                       name: "scope",
@@ -736,9 +401,7 @@ app_payload() {
                 } else {} end))
             },
             token: {
-              # accessTokenType, NOT accessTokenFormat. Praxis validates the
-              # access token as a JWT against the tenant JWKS, so "default"
-              # (opaque) would fail at identity.
+              # Use JWT access tokens so Praxis can validate them against the tenant JWKS.
               accessTokenType: "jwt",
               audiences: $c.audiences,
               attributeMappings: $mappers
@@ -750,11 +413,7 @@ app_payload() {
       }'
 }
 
-# ==========================================================================
-# discovery
-# ==========================================================================
-# The two facts this script cannot safely assume: which template a custom OIDC
-# app uses, and each claim'"'"'s scimName. Both are read off the tenant.
+# Discover the tenant OIDC template id and each claim attribute SCIM name.
 discover() {
   echo
   echo "$(dim 'Tenant facts') $(dim "-> ${TENANT_URL}")"
@@ -812,10 +471,7 @@ discover() {
 
   echo
   echo "$(dim 'Consent') $(dim '(consentType + the exchange tokenRequestMap purpose)')"
-  # Reads back on GET, so unlike idTokenSigningAlg this one is discoverable.
-  # Shown because consentType is a TENANT-WIDE setting the script does not
-  # manage: if a tenant is not on "dpcm", the auto-granted purpose below is
-  # meaningless and the audience-narrowing exchange needs rethinking.
+  # Report the tenant-wide consentType; the request mapping requires dpcm.
   local ctype trmn trmp
   while IFS=$'\t' read -r aid aname; do
     [ -n "$aid" ] || continue
@@ -882,47 +538,12 @@ discover() {
   done
 }
 
-# ==========================================================================
-# consent purpose
-# ==========================================================================
-# The DPCM purpose the exchange client's tokenRequestMap auto-grants. It is a
-# tenant resource, NOT part of the application, and it lives behind a different
-# API than everything else this script touches:
-#
-#   /config/v1.0/privacy/purposes        POST, GET   (collection)
-#   /config/v1.0/privacy/purposes/<id>   PUT, GET, DELETE
-#
-# Confirmed by OPTIONS on a live tenant. Note the shape: the base is
-# /config/v1.0/..., not /v1.0/... like the Applications API, so it does NOT go
-# through api() — see api_dpcm(). A wrong path here does not 404; the tenant
-# serves an HTML login-redirect page with HTTP 200, which is why api_dpcm()
-# checks the content type rather than trusting the status code.
-#
-# ---------------------------------------------------------------------------
-# Create is two calls, because POST only ever creates a DRAFT
-# ---------------------------------------------------------------------------
-# A purpose is versioned, and POST always lands a draft regardless of what the
-# payload says:
-#
-#   POST {... "state": 1 ...}  ->  201, then GET shows
-#                                  state=0, version=0, activeVersion=null,
-#                                  hasDraft=true
-#
-# A draft purpose exists but cannot be consented against, so the exchange would
-# still fail — and it fails at DPCM, which reads as a consent problem rather
-# than a provisioning one. The published tenant purpose reads back as
-# state=1, version=1, activeVersion=1, hasDraft=false.
-#
-# Publishing is a PATCH of the VERSIONED item flipping state to 1 — see
-# publish_purpose() for the exact call and the three shapes that do NOT work.
-# create_purpose() therefore POSTs, reads the draft's version back, PATCHes, and
-# only reports success once a further read shows an activeVersion.
+# DPCM purposes use /config/v1.0/privacy/purposes. POST creates a draft;
+# publish with a versioned PATCH before clients reference it.
+# api_dpcm() detects HTML login redirects that incorrectly return HTTP 200.
 PURPOSE_PATH="/config/v1.0/privacy/purposes"
 
-# Like api(), but for the /config/v1.0 DPCM base and with one extra guard: an
-# unknown path under this base returns HTTP 200 with an HTML login-redirect
-# body instead of a 404, so a typo would otherwise look like success and then
-# fail jq parsing further down. Maps that case to a synthetic 000.
+# Reject HTML responses from unknown DPCM paths, even when HTTP status is 200.
 api_dpcm() {
   local method="$1" path="$2" body="${3:-}"
   local -a args=(-sS -o - -w $'\n%{http_code}' -X "$method" "${TENANT_URL}${path}"
@@ -941,9 +562,7 @@ api_dpcm() {
   printf '%s\n' "$raw"
 }
 
-# The create body. `state: 1` is sent even though POST ignores it: the PUT that
-# publishes reuses this same payload, and a body that disagrees with itself
-# between the two calls is worse than a field the first call drops.
+# Reuse the payload for creation and publication; POST ignores state.
 purpose_payload() {
   jq -n \
     --arg id       "$CONSENT_PURPOSE_ID" \
@@ -965,43 +584,23 @@ purpose_payload() {
       tags: ($tags | split("|") | map(select(length > 0))),
       category: "default",
       accessTypes: [{ id: $access }],
-      # No attributes: the purpose governs an audience, not a set of PII
-      # attributes, so there is nothing to enumerate. An empty list is required
-      # rather than omitted.
+      # Audience purposes require an empty attributes list.
       attributes: [],
       customAttributes: []
     }'
 }
 
-# "<state>\t<activeVersion>\t<version>" for the purpose, or empty if it does not
-# exist. All three matter: a draft left behind by a half-finished run exists but
-# has activeVersion=null, and publishing it needs its version number for the
-# PATCH path (see publish_purpose).
+# Return state, activeVersion, and version, or empty if the purpose is absent.
+# A draft has no activeVersion; publication requires its version number.
 find_purpose() {
   _split_resp "$(api_dpcm GET "${PURPOSE_PATH}/${CONSENT_PURPOSE_ID}")"
   [ "$RESP_STATUS" = "200" ] || return 1
   printf '%s' "$RESP_BODY" | jq -r '"\(.state // 0)\t\(.activeVersion // "")\t\(.version // 0)"'
 }
 
-# Publish the draft at version $1 by flipping its state to active.
-#
-# This is a PATCH of the VERSIONED resource, and neither half of that is
-# guessable — both were established against a live tenant:
-#
-#   PATCH /config/v1.0/privacy/purposes/<id>/<version>
-#   {"op": "replace", "path": "state", "value": 1}          -> 204
-#
-#   - The version belongs in the PATH. A PUT or PATCH of the unversioned item
-#     is "create/update a draft", NOT publish: it answers 403 CSIBT0024E
-#     ("Only one draft version for purpose is allowed") because a draft already
-#     exists. Putting state:1 in a PUT body does nothing either — the PUT
-#     returns 204 and the purpose stays state=0.
-#   - `path` is the bare field name "state", not JSON-Pointer "/state" (which
-#     the API rejects: CSIBT0026E, "Valid input is [state]"), and the body is a
-#     single object, not the RFC 6902 array (which reports `op` missing).
-#
-# After this the purpose reads state=1, version=1, activeVersion=1,
-# hasDraft=false — the shape a published purpose has.
+# Publish with PATCH /config/v1.0/privacy/purposes/<id>/<version>.
+# Use a single {op: replace, path: state, value: 1} object. The path has no
+# leading slash. Unversioned updates create drafts instead of publishing.
 publish_purpose() {
   local version="$1"
   _split_resp "$(api_dpcm PATCH "${PURPOSE_PATH}/${CONSENT_PURPOSE_ID}/${version}" \
@@ -1025,9 +624,7 @@ create_purpose() {
     return 0
   fi
 
-  # Idempotent, like the client create: an existing ACTIVE purpose is left
-  # alone. Overwriting it would bump the version and invalidate consents already
-  # granted against it, which is not something a provisioning re-run should do.
+  # Leave active purposes unchanged; republishing invalidates existing consents.
   if existing=$(find_purpose) && [ -n "$existing" ]; then
     state=$(printf '%s' "$existing" | cut -f1)
     active=$(printf '%s' "$existing" | cut -f2)
@@ -1118,12 +715,8 @@ delete_purpose() {
   esac
 }
 
-# ==========================================================================
-# clients
-# ==========================================================================
-# Look up an application by name -> "<id>\t<clientId>". Makes create idempotent
-# and drives --delete. Filtered client-side: the search syntax for this endpoint
-# is undocumented, and a wrong filter silently returns everything.
+# Look up an application by name -> id<TAB>clientId.
+# Filter locally because this endpoint search syntax is undocumented.
 find_app() {
   local name="$1" id
   _split_resp "$(api GET "/v1.0/applications?limit=200")"
@@ -1148,9 +741,7 @@ fetch_credentials() {
     "\(.providers.oidc.properties.clientId // "")\t\(.providers.oidc.properties.clientSecret // "")"'
 }
 
-# name<TAB>id<TAB>secret for every client created in this run, consumed by
-# write_back(). Kept in memory: secrets do not belong on disk outside the
-# gitignored post_deploy_variables.json.
+# Keep generated name/id/secret tuples in memory until write_back().
 declare -a CREATED=()
 # Clients created in this run whose entitlement did NOT get granted — skipped
 # with --no-entitle, or the grant failed. These cannot mint until it is fixed.
@@ -1176,11 +767,7 @@ create_clients() {
     # and no way to tell which one the config refers to.
     if existing=$(find_app "$name") && [ -n "$existing" ]; then
       warn "$name" "$(dim "exists (client_id=$(printf '%s' "$existing" | cut -f2)) — left unchanged; use --delete to replace")"
-      # The application itself is left alone, but ENTITLEMENT is repaired: it
-      # lives on a separate resource, and a tenant provisioned before the agent
-      # existed has the exchange client entitled per-persona, which the agent
-      # subject cannot satisfy (CSIAQ0279E). Re-running the importer should fix
-      # that rather than requiring --delete of a working client.
+      # Preserve existing applications and repair exchange entitlement for agent subjects.
       if [ "$role" = "exchange" ] && [ "$DO_ENTITLE" = true ]; then
         local ag_rows
         ag_rows=$(printf '%s' "$CLIENTS_JSON" | jq '[.[] | select(.role=="agent")] | length')
@@ -1208,21 +795,9 @@ create_clients() {
         secret=$(printf '%s' "$creds" | cut -f2)
         ok "$name" "$(dim "$role — client_id=${cid:-?}")"
         CREATED+=("$name"$'\t'"$cid"$'\t'"$secret")
-        # A client users authenticate TO is gated on application entitlement,
-        # which is a separate resource from the application itself. Grant it now
-        # or the client cannot mint (CSIAQ0279E). See the script header.
-        # Both mint AND exchange need entitlement. The exchange was long assumed
-        # not to ("nobody authenticates to it"), but an RFC 8693 exchange carries
-        # the SUBJECT's identity, so Verify checks that subject against the
-        # exchange application as well — without it the exchange leg fails
-        # CSIAQ0279E even though the mint leg works. Verified on a live tenant.
-        # role=audience genuinely needs none: nothing ever presents a subject
-        # to it.
-        #
-        # role=agent needs none of its OWN either — nothing authenticates TO the
-        # agent's client. But see entitle_app: when an agent row exists, the
-        # EXCHANGE client must be entitled by birthright rather than per-user,
-        # because the agent is the exchange subject and is not a persona user.
+        # Both mint and exchange subjects need application entitlement (CSIAQ0279E).
+        # Use explicit persona grants by default or birthright access with --all-users.
+        # Audience-only clients do not need user grants.
         if [ "$role" = "mint" ] || [ "$role" = "exchange" ]; then
           if [ "$DO_ENTITLE" = true ]; then
             if ! entitle_app "$id" "$name"; then
@@ -1336,25 +911,8 @@ PY_INNER
 entitle_app() {
   local id="$1" name="$2" body payload_desc
 
-  # --------------------------------------------------------------------------
-  # The agent forces birthright on the EXCHANGE client
-  # --------------------------------------------------------------------------
-  # Application entitlement is checked against the exchange SUBJECT. The demo's
-  # per-user model grants it to each persona by SCIM id, which works for bob /
-  # alice / eve — and cannot work for the agent, which is an OAuth client, not
-  # a user in the directory. There is no SCIM id to add.
-  #
-  # So when a role=agent row exists, the exchange client is entitled by
-  # birthright (every principal in the tenant) instead. Without this, scenario
-  # 14's delegate step fails with:
-  #   CSIAQ0279E Only entitled users can single sign-on to the application.
-  # while scenarios 01-13 pass, because their subjects ARE personas. Verified
-  # on praxis-2: birthright on the exchange client fixes the agent exchange and
-  # leaves all three persona exchanges working.
-  #
-  # Scoped deliberately: only the exchange client, and only when an agent is
-  # being provisioned. The minting client keeps its explicit per-user grants,
-  # which is what makes "only these four personas can sign on" demonstrable.
+  # Agent subjects have no SCIM user id for explicit grants. When an agent row
+  # exists, the exchange application needs birthright entitlement.
   local agent_rows
   agent_rows=$(printf '%s' "$CLIENTS_JSON" | jq '[.[] | select(.role=="agent")] | length')
   local this_role
@@ -1424,51 +982,13 @@ entitle_app() {
   esac
 }
 
-# ==========================================================================
-# write-back
-# ==========================================================================
-# Verify GENERATES the client_id and client_secret, so unlike the Keycloak realm
-# export nothing downstream can hardcode them. mint-verify-token.sh and
-# verify-ibm-verify-token-exchange.sh both read them from
-# post_deploy_variables.json, so a freshly provisioned tenant is only usable
-# once they land there. That file is gitignored (it holds live credentials).
+# Save generated OAuth credentials in post_deploy_variables.json for the token
+# scripts and policy renderer.
 #
-# policy-verify-opa.yaml needs no editing here: it is GENERATED from
-# policy-verify-opa.yaml.tmpl by ../render-verify-config.sh, which reads the
-# exchange client_id from GATEWAY_CLIENT_ID in this same file (or from
-# $VERIFY_GATEWAY_CLIENT_ID). restart.sh renders it on every Verify run, so a
-# write-back here is all that is needed for the new id to reach the gateway.
-# ==========================================================================
-# Agent Registry (scenario 14)
-# ==========================================================================
-# The second half of role=agent. The OAuth client above is what the agent
-# AUTHENTICATES as; the Agent Registry record is what it IS to governance —
-# display name, owner, tags, and a lifecycle status an admin flips in the
-# console.
-#
-# Four tenant behaviors are load-bearing here. Each was verified against
-# praxis-2 and each breaks the demo quietly if ignored:
-#
-#   1. CREATE ALWAYS LANDS IN `UNDER_REVIEW`. POST /v1.0/Agents ignores the
-#      `status` field entirely — sending "ACTIVE" explicitly still stores
-#      UNDER_REVIEW (measured on praxis-2; the brainstorm's finding E8 assumed
-#      an explicit value was enough, and it is not). Only PUT honors a status
-#      change. So create_agents() POSTs and then PROMOTES with a follow-up PUT,
-#      and reports loudly if the promotion does not take — a demo whose agent
-#      silently starts un-approved would look like the kill switch is stuck on.
-#   2. `oauthClients[0].issuer` is REQUIRED (CSINH2100E otherwise) and is
-#      tenant-specific: on praxis-2 it is the token issuer,
-#      <tenant>/oauth2. Derived below, never hardcoded.
-#   3. `oauthClients` is WRITE-ONLY. It reads back as null on GET and on LIST
-#      even immediately after a 201/200 that accepted it. So association is
-#      verified by the write's status code and NOT by reading it back; a
-#      read-back check here would always "fail" against a correct tenant.
-#   4. PUT is a FULL REPLACE. A PUT that omits description/tags/oauthClients
-#      clears them. set_agent_status() therefore re-sends the whole record.
-#
-# Early Access: a tenant without Agent Registry answers 403/404 on
-# /v1.0/Agents. That must not fail the client import, so every call here warns
-# and continues rather than dying.
+# Agent Registry setup: POST creates UNDER_REVIEW; promote with PUT.
+# oauthClients requires the tenant issuer and is write-only. PUT replaces the
+# full record, so re-send description, tags, and the client association.
+# Warn and continue on tenants without Agent Registry (403/404).
 
 # The Agents API speaks SCIM, which api() does not: it sends
 # `Accept: application/json`. Hence a sibling rather than a reuse.
@@ -1531,39 +1051,10 @@ declare -a AGENTS_CREATED=()
 READER_CREATED=""
 OPERATOR_CREATED=""
 
-# --------------------------------------------------------------------------
-# The gateway's own credential: a readAgents-only API client
-# --------------------------------------------------------------------------
-# The gateway must read /v1.0/Agents/{id} on the request path to enforce agent
-# status. Handing it the admin API client for that would be wrong: that client
-# carries ~40 entitlements including writeAgents and agentOwner, so a gateway
-# compromise would mean an attacker could rewrite the very records that are
-# supposed to govern it — and silently re-enable a suspended agent.
-#
-# So provisioning mints a dedicated API client holding exactly ONE entitlement,
-# `readAgents`. Verified against praxis-2: with it the gateway can GET an agent
-# record (200) and can do nothing else — PUT /v1.0/Agents is 403, POST
-# /v2.0/Users is 403, GET /v1.0/applications is 403.
-#
-# The admin pair goes back to being provisioning-only, which is what the rest of
-# this script already assumes.
-#
-# Two API details worth knowing:
-#   - POST /v1.0/apiclients returns 201 with an EMPTY body, so the client has to
-#     be found by name afterwards.
-#   - the secret is not in the collection listing, only on
-#     GET /v1.0/apiclients/{id}. Which is also why this is readable at all:
-#     there is no "show secret once" semantics to miss.
+# Provision a readAgents API client for gateway status lookups.
+# Keep its credentials in .env.verify, separate from provisioning credentials.
 READER_CLIENT_NAME="${READER_CLIENT_NAME:-praxis-agent-status-reader}"
-# The OPERATOR credential: status changes only, used by
-# verify/set-agent-status.sh (and by a human mid-demo). Deliberately a SECOND
-# client rather than another entitlement on the reader above.
-#
-# Splitting them is the whole point. `manageAgentStatus` can flip an agent back
-# to ACTIVE, so a gateway holding it could re-enable the agent its own policy
-# just suspended — the kill switch would be its own bypass. Verified on
-# praxis-2: the reader gets 403 on PUT /v1.0/Agents, and the operator gets 403
-# on everything except a status change.
+# Provision a separate manageAgentStatus client for status changes.
 OPERATOR_CLIENT_NAME="${OPERATOR_CLIENT_NAME:-praxis-agent-status-operator}"
 
 find_api_client() {
@@ -1574,12 +1065,7 @@ find_api_client() {
     '[.apiClients[]? | select(.clientName==$n) | .id] | .[0] // empty'
 }
 
-# Creates an agent-status API client when absent and reads back its
-# credentials. Takes the client name, the single entitlement it must hold, and
-# the name of the global to stash "<client_id>\t<secret>" into.
-#
-# Parameterised rather than duplicated because the two clients differ in
-# exactly one field, and a copy-paste pair would drift.
+# Create an absent API client and store client_id<TAB>secret in the named global.
 _create_status_client() {
   local name="$1" entitlement="$2" out_var="$3"
   local body id
@@ -1643,22 +1129,11 @@ _create_status_client() {
     warn "$name" "$(dim "client_id=${cid} — UNEXPECTED entitlements: ${ents:-none}")"
     echo "$(dim "      Expected $entitlement alone. Narrow it in the console before relying on it.")"
   fi
-  # Indirect assignment: bash 3.2 (stock macOS) has no nameref, so this is the
-  # portable form. Values are a tenant UUID and its secret, neither of which
-  # can contain a quote, and both come from jq rather than from user input.
+  # Use indirect assignment for bash 3.2, which lacks nameref.
   eval "$out_var=\"\$cid\"\$'\\t'\"\$secret\""
 }
 
-# Both agent-status credentials. The split is a security boundary, not tidiness:
-#
-#   reader   readAgents         the GATEWAY, on the request path. Can read an
-#                               agent record and nothing else.
-#   operator manageAgentStatus  verify/set-agent-status.sh and a human admin.
-#                               Can change status and nothing else — not even
-#                               rename the agent (403 CSINH2507E).
-#
-# Neither can do the other's job, so a compromised gateway cannot undo a
-# suspension and the operator credential cannot be used to read traffic.
+# Reader: readAgents for the gateway. Operator: manageAgentStatus for status changes.
 create_status_clients() {
   local agent_rows
   agent_rows=$(printf '%s' "$CLIENTS_JSON" | jq '[.[] | select(.role=="agent")] | length')
@@ -1870,9 +1345,7 @@ write_back() {
     updated=$((updated + 1))
   done
 
-  # The Agent Registry id. Not a credential — it is the governance handle the
-  # gateway's agent-status plugin and verify/set-agent-status.sh both read, so
-  # it belongs next to the client ids rather than in .env.verify.
+  # Save the registry id for the gateway and status script.
   local aentry aname aid
   for aentry in ${AGENTS_CREATED[@]+"${AGENTS_CREATED[@]}"}; do
     aname="$(printf '%s' "$aentry" | cut -f1)"
@@ -1894,15 +1367,8 @@ write_back() {
   write_back_reader
 }
 
-# The reader client's id and SECRET.
-#
-# Deliberately not post_deploy_variables.json: that file holds generated ids and
-# is handed around, whereas this is a live credential the gateway process reads
-# at runtime. .env.verify is where this demo already keeps those, and restart.sh
-# sources it into the gateway's environment.
-#
-# Appended rather than rewritten, and only when absent, so a hand-managed
-# .env.verify is never clobbered.
+# Save registry-client credentials in .env.verify, which restart.sh loads.
+# Replace existing assignments after re-provisioning to avoid stale credentials.
 write_back_reader() {
   [ -n "$READER_CREATED" ] || [ -n "$OPERATOR_CREATED" ] || return 0
   local envf="$DEMO_DIR/.env.verify"
@@ -1930,12 +1396,7 @@ write_back_reader() {
         ok "$(basename "$envf")" "$(dim "${label} client already current")"
         return 0
       fi
-      # The ids disagree. This is what a clean-slate re-provision produces: new
-      # tenant clients, stale values here — and the stale ones will fail to
-      # authenticate, which surfaces much later as a confusing gateway error.
-      # Rewrite in place rather than appending a duplicate: a second
-      # assignment of the same variable would silently win or lose depending on
-      # sourcing order.
+      # Replace stale credentials after re-provisioning.
       local tmpf
       tmpf="$(mktemp)"
       sed -e "s|^${var_prefix}_CLIENT_ID=.*|${var_prefix}_CLIENT_ID=${cid}|" \
@@ -1959,9 +1420,7 @@ write_back_reader() {
     ok "$(basename "$envf")" "$(dim "${var_prefix}_CLIENT_ID + _SECRET appended")"
   }
 
-  # Two credentials, deliberately separate. Neither can do the other's job:
-  # the reader cannot change status (403), the operator cannot read anything
-  # else (403). So a compromised gateway cannot undo a suspension.
+  # Save separate reader and status-operator credentials.
   _append_pair VERIFY_AGENT_READER "$READER_CREATED" \
     "reader" "readAgents" \
     "the GATEWAY, on the request path (agent-status plugin)"
@@ -1990,9 +1449,7 @@ if [ "$DRY_RUN" = false ]; then
   get_token
   resolve_scim_names
 else
-  # No tenant call, so scimNames cannot be resolved. Say so where the payloads
-  # are about to be printed rather than letting getCustomValues("<display name>")
-  # look authoritative.
+  # Dry-run cannot discover SCIM names; report the display-name fallback.
   echo "$(dim 'note    ')" "$(yellow 'claim mappers below assume scimName == claim name (unverifiable offline)')"
 fi
 
