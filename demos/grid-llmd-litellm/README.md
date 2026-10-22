@@ -42,10 +42,17 @@ Those four are the only steps no chart can express.
 **The llm-d layer**, one chart per site. The sites differ by one key:
 
 ```bash
-helm upgrade --install llmd-site ./charts/llmd-site -n grid --create-namespace \
-  --kube-context kind-grid-llmd-site-a --set site=site-a
-helm upgrade --install llmd-site ./charts/llmd-site -n grid --create-namespace \
-  --kube-context kind-grid-llmd-site-b --set site=site-b
+helm upgrade --install llmd-site ./charts/llmd-site \
+  --kube-context kind-grid-llmd-site-a \
+  --namespace grid \
+  --create-namespace \
+  --set site=site-a
+
+helm upgrade --install llmd-site ./charts/llmd-site \
+  --kube-context kind-grid-llmd-site-b \
+  --namespace grid \
+  --create-namespace \
+  --set site=site-b
 ```
 
 **Enrollment**, on the hub only, in its own namespace because that namespace
@@ -53,7 +60,9 @@ holds the Grid CA key:
 
 ```bash
 helm upgrade --install grid-enrollment "$GRID_REPO/charts/grid-enrollment" \
-  --kube-context kind-grid-llmd-site-a -n grid-enrollment --create-namespace \
+  --kube-context kind-grid-llmd-site-a \
+  --namespace grid-enrollment \
+  --create-namespace \
   --set host=enroll.grid.demo \
   --set invites.site-a.network=grid-llmd \
   --set invites.site-b.network=grid-llmd \
@@ -86,7 +95,8 @@ enrollment names below are chart defaults, spelled out so the flow is visible:
 
 ```bash
 helm upgrade --install grid-operator "$GRID_REPO/charts/grid-operator" \
-  --kube-context "$SITE" -n grid \
+  --kube-context "$SITE" \
+  --namespace grid \
   --set enrollment.enabled=true \
   --set enrollment.url=https://enroll.grid.demo:8443 \
   --set enrollment.siteName=site-b \
@@ -94,12 +104,14 @@ helm upgrade --install grid-operator "$GRID_REPO/charts/grid-operator" \
   --set enrollment.caBundle.secret=grid-ca-bundle \
   --set enrollment.identitySecretName=grid-site-identity \
   --set enrollment.caSecretName=grid-ca \
-  --set swim.siteName=site-b --set swim.seeds=10.90.0.201:7946 \
+  --set swim.siteName=site-b \
+  --set swim.seeds=10.90.0.201:7946 \
   --set swim.service.type=LoadBalancer \
   --set swim.service.annotations."metallb\.io/loadBalancerIPs"=10.90.0.221 \
   --set signals.enabled=true \
   --set signals.service.annotations."metallb\.io/loadBalancerIPs"=10.90.0.224 \
-  --set gateway.serviceName=provider-gateway --set gateway.port=8443
+  --set gateway.serviceName=provider-gateway \
+  --set gateway.port=8443
 ```
 
 The invite is one-time. If `grid-site-identity` is deleted the operator retries
@@ -108,7 +120,10 @@ a spent token, so do not let Argo prune it.
 Confirm the identity carries the SPIFFE ID the rest of the grid authorizes on:
 
 ```bash
-kubectl -n grid get secret grid-site-identity -o go-template='{{index .data "tls.crt"}}' | base64 -d | openssl x509 -noout -subject -ext subjectAltName
+kubectl -n grid get secret grid-site-identity \
+  -o go-template='{{index .data "tls.crt"}}' \
+  | base64 -d \
+  | openssl x509 -noout -subject -ext subjectAltName
 ```
 
 ```
@@ -122,9 +137,20 @@ gateways. These carry structured values, so they read better as files than as
 `--set`:
 
 ```bash
-helm upgrade --install grid-site     "$GRID_REPO/charts/grid-site"     -n grid -f values/site-b-grid-site.yaml
-helm upgrade --install provider-gateway "$GRID_REPO/charts/praxis-gateway" -n grid -f values/site-b-provider-gateway.yaml
-helm upgrade --install consumer-gateway "$GRID_REPO/charts/praxis-gateway" -n grid -f values/site-b-consumer-gateway.yaml
+helm upgrade --install grid-site "$GRID_REPO/charts/grid-site" \
+  --kube-context "$SITE" \
+  --namespace grid \
+  --values values/site-b-grid-site.yaml
+
+helm upgrade --install provider-gateway "$GRID_REPO/charts/praxis-gateway" \
+  --kube-context "$SITE" \
+  --namespace grid \
+  --values values/site-b-provider-gateway.yaml
+
+helm upgrade --install consumer-gateway "$GRID_REPO/charts/praxis-gateway" \
+  --kube-context "$SITE" \
+  --namespace grid \
+  --values values/site-b-consumer-gateway.yaml
 ```
 
 `grid-site` sets `signalTransport: poll` and `peerTrust: spiffe`, and declares
