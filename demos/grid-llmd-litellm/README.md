@@ -77,12 +77,26 @@ namespace, carrying the site label, and refuses a token labelled for another
 site:
 
 ```bash
-kubectl --context "$HUB" -n grid-enrollment get secret grid-invite-site-b \
-  -o go-template='{{index .data "token"}}' | base64 -d \
-  | kubectl --context "$SITE" -n grid create secret generic grid-invite-site-b \
-      --from-file=token=/dev/stdin
-kubectl --context "$SITE" -n grid label secret grid-invite-site-b \
+# 1. read the invite from the hub
+kubectl --context "$HUB" \
+  --namespace grid-enrollment \
+  get secret grid-invite-site-b \
+  --output go-template='{{index .data "token"}}' \
+  | base64 --decode > invite-site-b.token
+
+# 2. create it on the site, under the name the operator looks for
+kubectl --context "$SITE" \
+  --namespace grid \
+  create secret generic grid-invite-site-b \
+  --from-file=token=invite-site-b.token
+
+# 3. label it, which is what the operator checks before redeeming
+kubectl --context "$SITE" \
+  --namespace grid \
+  label secret grid-invite-site-b \
   grid.praxis.fast/site=site-b
+
+rm invite-site-b.token
 ```
 
 Two more Secrets travel the same way: `grid-ca-bundle` from `grid-enrollment`,

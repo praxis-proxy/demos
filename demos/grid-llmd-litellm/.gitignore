@@ -1,1 +1,2 @@
 litellm/config.yaml
+*.token
