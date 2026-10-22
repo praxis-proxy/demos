@@ -12,21 +12,23 @@ name = "policy-engine-gateway"
 path = "src/main.rs"
 
 [dependencies]
-praxis-ai-proxy = { git = "https://github.com/praxis-proxy/ai", rev = "d6b252d4", features = ["praxis-main"] }
+praxis-ai-proxy = { git = "https://github.com/praxis-proxy/ai", rev = "c39f7198", features = ["praxis-main"] }
 # Declared to turn features on graph-wide rather than for anything this crate
 # calls. praxis-ai declares its praxis dependencies with no features at all, so
 # whatever it needs has to be enabled by the binary at the root of the graph.
 #
 # `policy-engine` registers the `policy` filter. It is in praxis's default
 # features since 0.6.0, and named here anyway so the dependency is explicit.
-# `chain-binding` gates `DeferredCredential`, `PendingCredentials` and
-# `ChainBindingContext::bind_chain`, which 0.6.0 moved behind a feature and
-# praxis-ai uses. Without it praxis-ai does not compile.
-praxis-proxy-filter = { version = "0.7", features = ["policy-engine", "chain-binding"] }
+#
+# `chain-binding` used to be listed too: 0.6.0 moved `DeferredCredential`,
+# `PendingCredentials` and `ChainBindingContext::bind_chain` behind it and the
+# old praxis-ai rev needed them. In 0.7.5 the feature is an empty stub and
+# praxis-ai 0.8.0 no longer reaches for any of it, so it is gone.
+praxis-proxy-filter = { version = "0.7.5", features = ["policy-engine"] }
 # Likewise for `admin-api`: praxis-ai's server calls the admin-endpoint helpers
 # unconditionally and praxis gates them behind this feature. Without it the
 # build fails on `add_admin_endpoints_to_pingora_server` not being found.
-praxis-proxy-protocol = { version = "0.7", features = ["admin-api"] }
+praxis-proxy-protocol = { version = "0.7.5", features = ["admin-api"] }
 
 # Unpublished reference plugins the demo registers itself, in main.rs. This is
 # the worked example of extending the engine with a plugin it does not bundle.
@@ -68,21 +70,6 @@ tikv-jemallocator = "0.7"
 #
 # So `.policy` should sit on the released tag. A checkout on some other branch
 # links its `praxis-policy-core` against the published rest of the engine.
-# The praxis fork. The published praxis-proxy-* 0.7.x all declare
-# `ppe = "0.3.1"`, which is what drags the 0.3.1 engine family into the graph
-# alongside the 0.4.0 copy `.policy` supplies by path — two praxis-policy-core,
-# two PluginFactory traits, and main.rs stops typechecking.
-#
-# The fork's ppe/v4bump branch bumps that requirement to 0.4.0 so the path
-# copy is the only engine in the graph.
-#
-# The fork's workspace version is 0.7.1, so the requirements above must stay
-# `"0.7"` — a `"0.7.2"` requirement cannot be satisfied by a 0.7.1 patch and
-# cargo drops it without a word.
-praxis-proxy-core = { git = "https://github.com/tedhabeck/praxis", branch = "ppe/v4bump" }
-praxis-proxy-filter = { git = "https://github.com/tedhabeck/praxis", branch = "ppe/v4bump" }
-praxis-proxy-protocol = { git = "https://github.com/tedhabeck/praxis", branch = "ppe/v4bump" }
-praxis-proxy-tls = { git = "https://github.com/tedhabeck/praxis", branch = "ppe/v4bump" }
 
 praxis-policy-core = { path = ".policy/crates/ppe-core" }
 praxis-policy-orchestration = { path = ".policy/crates/ppe-orchestration" }
@@ -97,9 +84,13 @@ praxis-policy-orchestration = { path = ".policy/crates/ppe-orchestration" }
 # instead, and the graph ends up holding both copies. That is what `check_graph`
 # reports as two copies of praxis-policy-core.
 
-# praxis is redirected at the fork, in [patch.crates-io] above, because at rev
-# d6b252d4 praxis-ai declares its praxis dependencies as plain crates.io
-# versions ("0.7.1") rather than by git rev. There is no git source left to
-# patch: a `[patch."https://github.com/praxis-proxy/praxis"]` block matches
-# nothing and cargo files it under [[patch.unused]], silently resolving the
-# registry copy instead.
+# praxis itself is no longer patched. It used to be redirected at a fork
+# (tedhabeck/praxis, branch ppe/v4bump) because the published praxis-proxy-*
+# 0.7.x required `ppe = "0.3.1"`, which dragged a second engine family into the
+# graph. Published 0.7.5 requires `ppe = "0.4.1"`, so the released crates agree
+# with the engine tag `.policy` sits on and the fork is unnecessary.
+#
+# Note the two pins below must match what praxis requires, exactly: `^0.4.1`
+# cannot be satisfied by a 0.4.0 or 0.5.0 path patch. Cargo does not report
+# that as an error — it drops the patch and resolves the registry copy instead,
+# leaving two praxis-policy-core in the graph.

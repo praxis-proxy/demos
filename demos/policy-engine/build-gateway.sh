@@ -33,7 +33,7 @@ set -euo pipefail
 # checkout supplying the reference plugins must sit on. Bump together with the
 # `praxis-proxy-*` version in gateway/Cargo.toml: praxis and the engine are one
 # change split across two repos.
-DEFAULT_PPE_REF="v0.4.0"
+DEFAULT_PPE_REF="v0.4.1"
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/gateway"
 PPE_LINK="$DIR/.policy"
