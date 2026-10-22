@@ -251,6 +251,45 @@ The one `no_match` is the first request, before any site held the prefix; the
 one gateway, 20 requests carrying the same long prompt all went to one site,
 while 24 distinct prompts split 12 and 12.
 
+## Reconfiguring the gateway
+
+Two things change a running gateway, and they are not the same.
+
+**Serving data changes on their own.** The operator rewrites the serving
+ConfigMap whenever the topology moves: a peer goes Active, a provider appears
+or leaves, an address changes. The gateway re-reads the mounted file every few
+seconds and applies it without a restart. That is how the second site's
+candidate arrives after enrollment, with no rollout.
+
+**Gateway settings are a chart value and a rollout.** Routing tuning lives in
+`praxisConfig.render.gridServing.siteRoute`, so changing it means upgrading the
+release. Edit the values file, or set it on the command line:
+
+```bash
+helm upgrade --install consumer-gateway "$GRID_REPO/charts/praxis-gateway" \
+  --kube-context "$SITE" \
+  --namespace grid \
+  --values values/site-a-consumer-gateway.yaml \
+  --set praxisConfig.render.gridServing.siteRoute.prefixAffinity.capacity=4096 \
+  --set praxisConfig.render.gridServing.siteRoute.availability.shedding=true
+```
+
+Pass the values file as well as the overrides. `--reuse-values` carries the old
+values forward and skips any default a newer chart added, which hides new
+settings rather than applying them.
+
+The rendered config is readable, which is the way to confirm a change landed
+rather than trusting the upgrade:
+
+```bash
+kubectl --namespace grid get configmap consumer-gateway-config \
+  --output go-template='{{index .data "praxis.yaml"}}' \
+  | grep --after-context=8 grid_site_route
+```
+
+The upgrade re-renders that ConfigMap and rolls the Deployment, so the gateway
+restarts. Expect in-flight requests to drain.
+
 ## Addresses
 
 | Site | SWIM | Signals | Provider | Consumer | Enrollment |
