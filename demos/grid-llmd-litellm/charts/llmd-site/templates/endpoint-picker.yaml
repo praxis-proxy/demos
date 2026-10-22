@@ -1,0 +1,145 @@
+apiVersion: inference.networking.k8s.io/v1
+kind: InferencePool
+metadata:
+  name: {{ include "llmd-site.site" . }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  targetPorts:
+    - number: {{ .Values.simulator.port }}
+  selector:
+    matchLabels:
+      {{- include "llmd-site.modelSelector" . | nindent 6 }}
+  endpointPickerRef:
+    name: llmd-epp
+    port:
+      number: {{ .Values.endpointPicker.grpcPort }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: llmd-epp
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Namespace }}-llmd-epp
+rules:
+  - apiGroups: ["inference.networking.k8s.io"]
+    resources: ["inferencepools"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["inference.networking.k8s.io"]
+    resources: ["inferencepools/status"]
+    verbs: ["update", "patch"]
+  - apiGroups: [""]
+    resources: ["pods", "endpoints", "services"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Namespace }}-llmd-epp
+subjects:
+  - kind: ServiceAccount
+    name: llmd-epp
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ .Release.Namespace }}-llmd-epp
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llmd-epp
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: llmd-epp
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: llmd-epp
+    spec:
+      serviceAccountName: llmd-epp
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: epp
+          image: "{{ .Values.endpointPicker.repository }}:{{ .Values.endpointPicker.tag }}"
+          imagePullPolicy: {{ .Values.endpointPicker.pullPolicy }}
+          args:
+            - --pool-name={{ include "llmd-site.site" . }}
+            - --pool-namespace={{ .Release.Namespace }}
+            - --grpc-port={{ .Values.endpointPicker.grpcPort }}
+            - --grpc-health-port={{ .Values.endpointPicker.healthPort }}
+            - --metrics-port={{ .Values.endpointPicker.metricsPort }}
+            # Grid scrapes these metrics to score the site, so leave them open.
+            - --metrics-endpoint-auth=false
+            - --zap-log-level=info
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.endpointPicker.grpcPort }}
+            - name: grpc-health
+              containerPort: {{ .Values.endpointPicker.healthPort }}
+            - name: metrics
+              containerPort: {{ .Values.endpointPicker.metricsPort }}
+          readinessProbe:
+            grpc:
+              port: {{ .Values.endpointPicker.healthPort }}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            grpc:
+              port: {{ .Values.endpointPicker.healthPort }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llmd-epp
+  namespace: {{ .Release.Namespace }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: llmd-epp
+  ports:
+    - name: grpc
+      port: {{ .Values.endpointPicker.grpcPort }}
+      targetPort: {{ .Values.endpointPicker.grpcPort }}
+    - name: grpc-health
+      port: {{ .Values.endpointPicker.healthPort }}
+      targetPort: {{ .Values.endpointPicker.healthPort }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llmd-epp-metrics
+  namespace: {{ .Release.Namespace }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: llmd-epp
+  ports:
+    - name: metrics
+      port: {{ .Values.endpointPicker.metricsPort }}
+      targetPort: {{ .Values.endpointPicker.metricsPort }}

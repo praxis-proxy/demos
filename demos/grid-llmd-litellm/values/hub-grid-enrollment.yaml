@@ -1,0 +1,24 @@
+# Enrollment runs only on the hub cluster, in its own namespace, because that
+# namespace holds the Grid CA key. It mints one invite per site.
+
+image:
+  repository: ghcr.io/praxis-proxy/grid-enrollment
+  tag: v0.2.2
+  pullPolicy: IfNotPresent
+
+host: enroll.grid.demo
+
+route:
+  enabled: false
+
+enrollment:
+  service:
+    type: LoadBalancer
+    annotations:
+      metallb.io/loadBalancerIPs: "10.90.0.205"
+
+invites:
+  site-a:
+    network: grid-llmd
+  site-b:
+    network: grid-llmd

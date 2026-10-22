@@ -1,0 +1,32 @@
+# Operator for site-b. It enrolls on first start, redeeming the invite Secret and
+# writing grid-site-identity and grid-ca itself. Nothing hand-mints a certificate.
+
+image:
+  repository: ghcr.io/praxis-proxy/grid-operator
+  tag: v0.2.2
+  pullPolicy: IfNotPresent
+
+enrollment:
+  enabled: true
+  url: "https://enroll.grid.demo:8443"
+
+signals:
+  enabled: true
+  peerIntervalSeconds: "2"
+  service:
+    annotations:
+      metallb.io/loadBalancerIPs: "10.90.0.224"
+
+swim:
+  siteName: site-b
+  seeds: "10.90.0.201:7946"
+  service:
+    enabled: true
+    type: LoadBalancer
+    port: 7946
+    annotations:
+      metallb.io/loadBalancerIPs: "10.90.0.221"
+
+gateway:
+  serviceName: provider-gateway
+  port: "8443"

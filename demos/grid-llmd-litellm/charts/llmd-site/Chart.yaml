@@ -1,0 +1,6 @@
+apiVersion: v2
+name: llmd-site
+description: "One site's llm-d stack: simulated vLLM pods, an InferencePool, the endpoint picker, and the Envoy that calls it over ext_proc."
+type: application
+version: 0.1.0
+appVersion: "0.11.0"

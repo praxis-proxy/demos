@@ -1,0 +1,44 @@
+# Provider gateway for site-a. Admits peers on their SPIFFE ID and forwards to the
+# local Envoy, which is where llm-d picks the pod.
+
+fullnameOverride: provider-gateway
+
+image:
+  repository: ghcr.io/praxis-proxy/grid-gateway
+  tag: v0.2.2
+  flavor: grid-gateway
+  pullPolicy: IfNotPresent
+
+grid:
+  siteName: site-a
+
+praxisConfig:
+  source: render
+  render:
+    role: provider
+    model: Qwen/Qwen3-0.6B
+    peerTrust:
+      mode: spiffe
+      spiffeIds:
+        - spiffe://grid.internal/site/site-a
+        - spiffe://grid.internal/site/site-b
+    backends:
+      - cluster: local
+        endpoints:
+          - "10.96.0.100:8081"
+        transport:
+          mode: plaintext
+
+gridIdentity:
+  tlsSecretName: grid-site-identity
+  caSecretName: grid-ca
+
+service:
+  enabled: true
+  type: LoadBalancer
+  port: 8443
+  annotations:
+    metallb.io/loadBalancerIPs: "10.90.0.202"
+
+podLabels:
+  grid.praxis.fast/provider-site: site-a
