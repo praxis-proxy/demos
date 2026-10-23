@@ -6,6 +6,7 @@ Simulates push notifications via web interface
 
 from flask import Flask, request, jsonify, render_template_string, redirect
 from datetime import datetime
+import os
 import threading
 import time
 import jwt
@@ -172,12 +173,8 @@ def ciba_auth_request():
         print(f"Message: {binding_message}")
         print(f"Scope: {scope}")
         print(f"Consent Required: {consent_required}")
-        print(f"FULL PAYLOAD KEYS: {list(data.keys())}")
-        print(f"FULL PAYLOAD: {data}", flush=True)
-        
-        if not auth_req_id:
-            print("✗ Error: Missing auth_req_id in token")
-            return jsonify({'error': 'missing_auth_req_id'}), 400
+        # Only log field names: the payload carries the callback bearer token.
+        print(f"Payload keys: {list(data.keys())}")
         
         # Store the request (simulates sending push notification)
         pending_requests[auth_req_id] = {
@@ -201,53 +198,41 @@ def ciba_auth_request():
         return jsonify({'error': str(e)}), 500
 
 def _notify_keycloak(req_data, status):
-    """POST the approver's decision back to Keycloak's CIBA callback.
+    """Report the decision to Keycloak before closing the local request."""
+    bearer_token = (req_data.get('data') or {}).get('bearer_token')
+    if not bearer_token:
+        print("✗ No bearer_token in payload — SPI needs to be rebuilt", flush=True)
+        return False
 
-    Both verdicts must be reported: until Keycloak hears one, the token
-    endpoint keeps answering `authorization_pending` and the caller waits
-    for the request to expire instead of learning it was refused.
-
-    `status` is Keycloak's AuthenticationChannelResponse status —
-    `SUCCEED` to grant, `CANCELLED` when the approver refuses.
-    """
+    kc_base = os.environ.get("KEYCLOAK_BASE", "http://localhost:8080")
+    kc_realm = os.environ.get("KEYCLOAK_REALM", "agent-realm")
+    callback_url = f"{kc_base}/realms/{kc_realm}/protocol/openid-connect/ext/ciba/auth/callback"
     try:
-        # The serialized JWT from the CIBA request authenticates the callback.
-        bearer_token = req_data.get('data', {}).get('bearer_token')
-        print(f"Bearer token present: {bool(bearer_token)}", flush=True)
-        if not bearer_token:
-            print("✗ No bearer_token in payload — SPI needs to be rebuilt", flush=True)
-            return
-        # Where to POST the CIBA callback. Configurable so the same channel
-        # works against any Keycloak/realm. The demo points this at its own
-        # gateway (keycloak:8081 inside compose, realm policy-demo).
-        import os as _os
-        kc_base = _os.environ.get("KEYCLOAK_BASE", "http://localhost:8080")
-        kc_realm = _os.environ.get("KEYCLOAK_REALM", "agent-realm")
-        callback_url = f"{kc_base}/realms/{kc_realm}/protocol/openid-connect/ext/ciba/auth/callback"
         callback_response = requests.post(
             callback_url,
             headers={
                 'Authorization': f'Bearer {bearer_token}',
                 'Content-Type': 'application/json'
             },
-            json={'status': status}
+            json={'status': status},
+            timeout=10,
         )
-        print(f"Callback to Keycloak ({status}): {callback_response.status_code} {callback_response.text[:120]}", flush=True)
-        if callback_response.status_code == 200:
-            if status == 'SUCCEED':
-                print("✓ Keycloak notified — next poll will return access token", flush=True)
-            else:
-                print("✓ Keycloak notified — next poll will return access_denied", flush=True)
-        else:
-            print(f"✗ Callback failed: {callback_response.text}", flush=True)
-    except Exception as e:
-        print(f"✗ Error reporting the decision: {e}", flush=True)
+    except requests.RequestException as exc:
+        print(f"✗ Keycloak callback ({status}) failed: {exc}", flush=True)
+        return False
+
+    if callback_response.status_code != 200:
+        print(f"✗ Keycloak callback ({status}) returned {callback_response.status_code}: "
+              f"{callback_response.text[:120]}", flush=True)
+        return False
+    print(f"✓ Keycloak callback accepted {status}", flush=True)
+    return True
 
 
 @app.route('/approve/<auth_req_id>', methods=['POST'])
 def approve_request(auth_req_id):
     """User approves the authentication request"""
-    if auth_req_id in pending_requests:
+    if auth_req_id in pending_requests and pending_requests[auth_req_id]['status'] == 'pending':
         req_data = pending_requests[auth_req_id]
         login_hint = req_data.get('login_hint', 'alice')
 
@@ -257,11 +242,11 @@ def approve_request(auth_req_id):
         print(f"User: {login_hint}")
         print(f"Request ID: {auth_req_id}")
 
-        # Mark as approved
+        if not _notify_keycloak(req_data, 'SUCCEED'):
+            return jsonify({'error': 'keycloak_callback_failed'}), 502
+
         req_data['status'] = 'approved'
         approved_requests.add(auth_req_id)
-
-        _notify_keycloak(req_data, 'SUCCEED')
 
         print(f"{'='*60}\n")
 
@@ -272,10 +257,8 @@ def approve_request(auth_req_id):
 @app.route('/deny/<auth_req_id>', methods=['POST'])
 def deny_request(auth_req_id):
     """User denies the authentication request"""
-    if auth_req_id in pending_requests:
+    if auth_req_id in pending_requests and pending_requests[auth_req_id]['status'] == 'pending':
         req_data = pending_requests[auth_req_id]
-        req_data['status'] = 'denied'
-        denied_requests.add(auth_req_id)
 
         print(f"\n{'='*60}")
         print(f"❌ REQUEST DENIED")
@@ -283,9 +266,11 @@ def deny_request(auth_req_id):
         print(f"User: {req_data['login_hint']}")
         print(f"Request ID: {auth_req_id}")
 
-        # Same callback as the approve path, opposite verdict — without it
-        # Keycloak never learns of the refusal and the caller just waits.
-        _notify_keycloak(req_data, 'CANCELLED')
+        if not _notify_keycloak(req_data, 'CANCELLED'):
+            return jsonify({'error': 'keycloak_callback_failed'}), 502
+
+        req_data['status'] = 'denied'
+        denied_requests.add(auth_req_id)
 
         print(f"{'='*60}\n")
 
@@ -297,8 +282,8 @@ def list_pending():
 
     The HTML UI truncates the request id, so a script can't drive an
     approval from it. This returns the full ids so a scenario can
-    auto-approve without a human clicking — see
-    scenarios/11-bob-adjust-approval.sh (AUTO_APPROVE=1). Optional
+    decide without a human clicking — see
+    scenarios/11-bob-adjust-approval.sh (AUTO_APPROVE=1 / AUTO_DENY=1). Optional
     `?login_hint=<user>` filters to one approver.
 
     Unauthenticated, like every route in this mock — including the
@@ -361,5 +346,3 @@ if __name__ == '__main__':
     print("="*60 + "\n")
     
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
-
-# Made with Bob

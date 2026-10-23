@@ -10,8 +10,7 @@ It implements the public Keycloak interfaces
 `AuthenticationChannelProvider` / `AuthenticationChannelProviderFactory` and
 registers under the provider id **`http-authentication-channel`**
 (`META-INF/services/…`). The target URL comes from the
-`CIBA_AUTH_CHANNEL_URL` env var (the demo sets it via
-`KC_SPI_CIBA_AUTH_CHANNEL_HTTP_AUTHENTICATION_CHANNEL_HTTP_AUTHENTICATION_CHANNEL_URI`).
+`CIBA_AUTH_CHANNEL_URL` env var, set by the demo's Compose file.
 
 ## Build
 

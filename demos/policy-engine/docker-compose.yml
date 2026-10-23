@@ -48,7 +48,7 @@ services:
       # clicks Approve there and the UI calls Keycloak back. Provider id
       # `http-authentication-channel`; the URI is the compose service.
       KC_SPI_CIBA_AUTH_CHANNEL_PROVIDER: http-authentication-channel
-      KC_SPI_CIBA_AUTH_CHANNEL_HTTP_AUTHENTICATION_CHANNEL_HTTP_AUTHENTICATION_CHANNEL_URI: "http://auth-channel:5001/ciba/auth"
+      CIBA_AUTH_CHANNEL_URL: "http://auth-channel:5001/ciba/auth"
     volumes:
       - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
     ports:

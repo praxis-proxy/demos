@@ -2,12 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Praxis Contributors
 #
-# Human-in-the-loop manager approval — the over-threshold half.
-# Bob asks for a >$10k adjustment; the gateway SUSPENDS the call with
-# JSON-RPC -32120 (a suspension, NOT a policy deny) and asks Bob's manager
-# (Alice) to decide out-of-band over OIDC CIBA. She can approve — the
-# default beats below — or refuse, which AUTO_DENY=1 exercises: the change
-# then never applies. The four beats:
+# Bob's >$10k adjustment needs Alice's decision over OIDC CIBA.
 #
 #   S1 adjust_compensation (+$25k) → -32120 pending; capture the
 #      elicitation_id + approver from error.data
@@ -17,12 +12,9 @@
 #        AUTO_APPROVE=1  — the script drives the auth-channel /pending +
 #                          /approve endpoints (no human click)
 #        AUTO_DENY=1     — same, but POSTs /deny: the manager refuses
-#   S3 peek (X-Policy-Elicitation-Id + peek) until the gateway stops
-#      answering -32120: -32121 (approved), or a denial error once the
-#      approver refused — reports status, does NOT apply. Polls slower
-#      than Keycloak's CIBA interval (~5s) to avoid a slow_down.
-#   S4 re-send WITHOUT peek. Approved → 200 OK, status "applied": the raise
-#      lands. Denied → the gateway refuses it and the raise never lands.
+#   S3 peek until the gateway reports approval (-32121) or denial.
+#      Poll slower than Keycloak's CIBA interval (~5s) to avoid slow_down.
+#   S4 re-send without peek. Only an approved adjustment reaches the upstream.
 #
 # The approval is bound to the amount (scope: args.amount <= 25000), so a
 # sign-off can't be replayed against a larger change.
@@ -83,8 +75,7 @@ note "approver: $APPROVER"
 [ -n "$EID" ] || { note "No elicitation_id in the response — cannot resume."; exit 1; }
 
 # --- S2 · the manager decides ---------------------------------------------
-# AUTO_DENY wins over AUTO_APPROVE if someone sets both, so a run asking to see
-# the refusal never silently grants the raise instead.
+# AUTO_DENY wins if both flags are set.
 if [ -n "${AUTO_DENY:-}" ]; then
   DECISION=deny
 elif [ -n "${AUTO_APPROVE:-}" ]; then
@@ -133,28 +124,30 @@ fi
 # --- S3 · peek until the approval resolves --------------------------------
 step "S3 · Peeking until the gateway reports the approver's decision"
 note "Re-sends with X-Policy-Elicitation-Id + peek — reports status, does NOT apply"
-# OUTCOME: approved (-32121) or denied (any other error once it stops pending).
-# A denial surfaces as a plain JSON-RPC error, not a dedicated code, so it is
-# the exit from -32120 — rather than a specific code — that marks the verdict.
 OUTCOME=""
 for i in $(seq 1 "$MAX_POLLS"); do
   RAW=$(ELICITATION_ID="$EID" ELICITATION_PEEK=1 \
         _post_tool "$BOB" "$CLIENT" "$(adjust_compensation_body "$AMOUNT" "$EMPLOYEE")")
-  CODE=$(_http_body "$RAW" | jq -r '.error.code // "200"' 2>/dev/null || echo "?")
+  BODY=$(_http_body "$RAW")
+  CODE=$(printf '%s' "$BODY" | jq -r '.error.code // empty' 2>/dev/null || true)
   case "$CODE" in
     -32121) OUTCOME=approved; note "poll $i: -32121 approved ✓"; break ;;
     -32120) note "poll $i: -32120 still pending…" ;;
-    *)      OUTCOME=denied
-            note "poll $i: resolved with code $CODE — the approver did not approve"
-            _print_response "$RAW"
-            break ;;
+    *)
+      _print_response "$RAW"
+      if [ "$LAST_STATUS" = 200 ] &&
+         printf '%s' "$BODY" | jq -e '.error.message == "elicitation denied by approver"' >/dev/null; then
+        OUTCOME=denied
+        note "poll $i: approver denied"
+        break
+      fi
+      note "Unexpected response while waiting for Alice's decision."
+      exit 1 ;;
   esac
   sleep "$POLL_SECONDS"
 done
 [ -n "$OUTCOME" ] || { note "No decision observed within ~$((MAX_POLLS * POLL_SECONDS))s."; exit 1; }
 
-# A run that asked for one decision but observed the other is a failure of the
-# flow, not a different-but-valid result — say so rather than asserting on it.
 if [ "$DECISION" = approve ] && [ "$OUTCOME" != approved ]; then
   note "AUTO_APPROVE=1 but the gateway did not report approved."; exit 1
 fi
@@ -181,17 +174,13 @@ if [ "$OUTCOME" = approved ]; then
   # Only now does the tool actually run: the suspended call reached no upstream.
   expect_upstream_calls 1
 else
-  # A denial is terminal for *that* elicitation — it cannot be resumed into an
-  # apply. The re-send is treated as a fresh ask, so the gateway suspends again
-  # on a NEW elicitation (-32120) and requires another sign-off. Either way the
-  # change does not apply and the tool does not run, which is the claim here.
-  # Asserting only "not ok" would also pass on a leftover approval applying the
-  # raise, so check the gateway did not produce a result.
-  expect_rpc_not_ok
-  expect_no_result_applied
+  expect_rpc_error -32120
+  expect_violation elicitation.pending
   expect_upstream_calls 0
 fi
 
-show_last_audit adjust_compensation
-expect_audit_record adjust_compensation
+if [ "$OUTCOME" = approved ]; then
+  show_last_audit adjust_compensation
+  expect_audit_record adjust_compensation
+fi
 finish

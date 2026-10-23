@@ -149,7 +149,7 @@ command:
 To check every scenario instead of watching the tour:
 
 ```bash
-./run-scenarios.sh                 # the running gateway
+./run-scenarios.sh                 # the running gateway; includes CIBA approve and deny
 ./run-scenarios.sh --all-configs   # Cedar, then CEL, then OPA
 
 # same PDP sweep against IBM Verify instead of Keycloak
@@ -486,18 +486,20 @@ The [scenarios](#scenarios) cover both sides of the threshold:
 
 ```bash
 ./scenarios/10-bob-adjust-under-threshold.sh   # +$5k → 200 applied, no approval
-./scenarios/11-bob-adjust-approval.sh          # +$25k → -32120 → approve → 200 applied
+./scenarios/11-bob-adjust-approval.sh          # +$25k → -32120 → manager decision
 ```
 
-Scenario 11 defaults to **manual** approval: it prints the pending request, then
-waits while you open `http://localhost:5001` and click **Approve** on the `alice`
-request; it polls (peek) until the gateway reports approved and applies the change.
-To run it unattended, set `AUTO_APPROVE=1`. The script then drives the auth-channel's
-`/pending` and `/approve` endpoints itself:
+Scenario 11 defaults to a **manual** decision: open `http://localhost:5001` and
+click **Approve** or **Deny** on the `alice` request. To run either path unattended,
+the script drives the auth-channel's `/pending` endpoint and the matching decision
+endpoint itself:
 
 ```bash
 AUTO_APPROVE=1 ./scenarios/11-bob-adjust-approval.sh
+AUTO_DENY=1 ./scenarios/11-bob-adjust-approval.sh
 ```
+
+`run-scenarios.sh` runs both paths automatically.
 
 Both scenarios behave identically under all three configs, since the
 `adjust_compensation` route has no PDP step.

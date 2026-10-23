@@ -289,31 +289,6 @@ expect_rpc_ok() {
   fi
 }
 
-# For refusals the gateway reports as an error envelope without a dedicated
-# code — a denied out-of-band approval, say — where "it did not succeed" is
-# the claim, and pinning an exact code would make the test brittle.
-expect_rpc_not_ok() {
-  local msg
-  if printf '%s' "${LAST_BODY:-}" | jq -e '.error' >/dev/null 2>&1; then
-    msg="$(printf '%s' "${LAST_BODY:-}" | jq -r '.error.message // empty' 2>/dev/null)"
-    pass_ "JSON-RPC error (not applied): ${msg:-<no message>}"
-  else
-    fail_ "expected a JSON-RPC error, got: $(printf '%s' "${LAST_BODY:-}" | jq -c '.result // .' 2>/dev/null)"
-  fi
-}
-
-# Guards the negative half of the approval flow: whatever the gateway answered,
-# it must not be a result claiming the change was applied.
-expect_no_result_applied() {
-  local got
-  got="$(_result_text | jq -r '.status // empty' 2>/dev/null)"
-  if [ "$got" = "applied" ]; then
-    fail_ "the change was applied despite no approval"
-  else
-    pass_ "no applied result (status='${got:-<none>}')"
-  fi
-}
-
 expect_violation() {
   local want="$1" hdr body
   hdr="$(printf '%s\n' "${LAST_HEADERS:-}" | awk 'tolower($1) == "x-policy-violation:" {print $2}' | tr -d '\r')"
