@@ -200,55 +200,69 @@ def ciba_auth_request():
         print(f"✗ Error: {e}")
         return jsonify({'error': str(e)}), 500
 
+def _notify_keycloak(req_data, status):
+    """POST the approver's decision back to Keycloak's CIBA callback.
+
+    Both verdicts must be reported: until Keycloak hears one, the token
+    endpoint keeps answering `authorization_pending` and the caller waits
+    for the request to expire instead of learning it was refused.
+
+    `status` is Keycloak's AuthenticationChannelResponse status —
+    `SUCCEED` to grant, `CANCELLED` when the approver refuses.
+    """
+    try:
+        # The serialized JWT from the CIBA request authenticates the callback.
+        bearer_token = req_data.get('data', {}).get('bearer_token')
+        print(f"Bearer token present: {bool(bearer_token)}", flush=True)
+        if not bearer_token:
+            print("✗ No bearer_token in payload — SPI needs to be rebuilt", flush=True)
+            return
+        # Where to POST the CIBA callback. Configurable so the same channel
+        # works against any Keycloak/realm. The demo points this at its own
+        # gateway (keycloak:8081 inside compose, realm policy-demo).
+        import os as _os
+        kc_base = _os.environ.get("KEYCLOAK_BASE", "http://localhost:8080")
+        kc_realm = _os.environ.get("KEYCLOAK_REALM", "agent-realm")
+        callback_url = f"{kc_base}/realms/{kc_realm}/protocol/openid-connect/ext/ciba/auth/callback"
+        callback_response = requests.post(
+            callback_url,
+            headers={
+                'Authorization': f'Bearer {bearer_token}',
+                'Content-Type': 'application/json'
+            },
+            json={'status': status}
+        )
+        print(f"Callback to Keycloak ({status}): {callback_response.status_code} {callback_response.text[:120]}", flush=True)
+        if callback_response.status_code == 200:
+            if status == 'SUCCEED':
+                print("✓ Keycloak notified — next poll will return access token", flush=True)
+            else:
+                print("✓ Keycloak notified — next poll will return access_denied", flush=True)
+        else:
+            print(f"✗ Callback failed: {callback_response.text}", flush=True)
+    except Exception as e:
+        print(f"✗ Error reporting the decision: {e}", flush=True)
+
+
 @app.route('/approve/<auth_req_id>', methods=['POST'])
 def approve_request(auth_req_id):
     """User approves the authentication request"""
     if auth_req_id in pending_requests:
         req_data = pending_requests[auth_req_id]
         login_hint = req_data.get('login_hint', 'alice')
-        
+
         print(f"\n{'='*60}")
         print(f"✅ USER APPROVED REQUEST")
         print(f"{'='*60}")
         print(f"User: {login_hint}")
         print(f"Request ID: {auth_req_id}")
-        
+
         # Mark as approved
         req_data['status'] = 'approved'
         approved_requests.add(auth_req_id)
-        
-        # Notify Keycloak via the bearer_token (serialized JWT from the CIBA request)
-        try:
-            bearer_token = req_data['data'].get('bearer_token')
-            print(f"Bearer token present: {bool(bearer_token)}", flush=True)
-            if bearer_token:
-                # Where to POST the CIBA approval callback. Configurable so
-                # the same channel works against any Keycloak/realm. The
-                # demo points this at its own gateway (keycloak:8081 inside
-                # compose, realm policy-demo).
-                import os as _os
-                kc_base = _os.environ.get("KEYCLOAK_BASE", "http://localhost:8080")
-                kc_realm = _os.environ.get("KEYCLOAK_REALM", "agent-realm")
-                callback_url = f"{kc_base}/realms/{kc_realm}/protocol/openid-connect/ext/ciba/auth/callback"
-                callback_response = requests.post(
-                    callback_url,
-                    headers={
-                        'Authorization': f'Bearer {bearer_token}',
-                        'Content-Type': 'application/json'
-                    },
-                    json={'status': 'SUCCEED'}
-                )
-                print(f"Callback to Keycloak: {callback_response.status_code} {callback_response.text[:120]}", flush=True)
-                if callback_response.status_code == 200:
-                    print("✓ Keycloak notified — next poll will return access token", flush=True)
-                else:
-                    print(f"✗ Callback failed: {callback_response.text}", flush=True)
-            else:
-                print("✗ No bearer_token in payload — SPI needs to be rebuilt", flush=True)
-                
-        except Exception as e:
-            print(f"✗ Error completing authentication: {e}")
-        
+
+        _notify_keycloak(req_data, 'SUCCEED')
+
         print(f"{'='*60}\n")
 
     # POST-redirect-GET: send the browser back to the list (a GET-safe URL)
@@ -259,14 +273,20 @@ def approve_request(auth_req_id):
 def deny_request(auth_req_id):
     """User denies the authentication request"""
     if auth_req_id in pending_requests:
-        pending_requests[auth_req_id]['status'] = 'denied'
+        req_data = pending_requests[auth_req_id]
+        req_data['status'] = 'denied'
         denied_requests.add(auth_req_id)
-        
+
         print(f"\n{'='*60}")
         print(f"❌ REQUEST DENIED")
         print(f"{'='*60}")
-        print(f"User: {pending_requests[auth_req_id]['login_hint']}")
+        print(f"User: {req_data['login_hint']}")
         print(f"Request ID: {auth_req_id}")
+
+        # Same callback as the approve path, opposite verdict — without it
+        # Keycloak never learns of the refusal and the caller just waits.
+        _notify_keycloak(req_data, 'CANCELLED')
+
         print(f"{'='*60}\n")
 
     return redirect('/')
