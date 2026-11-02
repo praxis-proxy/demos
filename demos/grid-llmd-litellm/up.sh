@@ -2,9 +2,11 @@
 # Two Grid sites over llm-d, behind a litellm front door.
 #
 # site-a is the hub: it runs enrollment, so both sites get their identity from
-# the Grid CA rather than from a hand-minted certificate. Peers are authorized on
-# their SPIFFE ID, signals travel by direct mTLS pull, and each consumer gateway
-# routes with grid_site_route over the operator-published serving config.
+# the Grid CA rather than from a hand-minted certificate. Membership is Local: each
+# site's values list its peers as GridSite records, and no SWIM runs. Peers are
+# authorized on their SPIFFE ID, signals travel by direct mTLS pull, and each
+# consumer gateway routes with grid_site_route over the operator-published
+# serving config.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -87,7 +89,7 @@ h "$HUB" upgrade --install grid-enrollment "$CHARTS/grid-enrollment" \
   -n grid-enrollment --create-namespace --values "$HERE/values/hub-grid-enrollment.yaml" \
   --wait --timeout 300s
 
-echo "== operators, each enrolling for its own identity =="
+echo "== operators and site topology, each site enrolling for its own identity =="
 copy_secret() {
   local from=$1 fromns=$2 name=$3 key=$4 to=$5 tons=$6 target=$7
   # go-template, not jsonpath: a key like ca.crt has a dot in it.
@@ -95,29 +97,30 @@ copy_secret() {
     | k "$to" -n "$tons" create secret generic "$target" --from-file="$key"=/dev/stdin \
       --dry-run=client -o yaml | k "$to" apply -f - >/dev/null
 }
-# One SWIM key for the grid, created once on the hub and copied to each site.
-if ! k "$HUB" -n grid get secret grid-swim-key >/dev/null 2>&1; then
-  head -c 32 /dev/urandom | k "$HUB" -n grid create secret generic grid-swim-key --from-file=key=/dev/stdin
-fi
+# Two Secrets cross clusters: the CA bundle the site checks the signer against,
+# and the site's one-time invite. The operator reads each only under its label.
 for s in $SITES; do
   copy_secret "$HUB" grid-enrollment grid-ca-bundle ca.crt "$s" grid grid-ca-bundle
+  k "$s" -n grid label secret grid-ca-bundle "grid.praxis.fast/signer-bundle=true" --overwrite >/dev/null
   copy_secret "$HUB" grid-enrollment "grid-invite-${s}" token "$s" grid "grid-invite-${s}"
   k "$s" -n grid label secret "grid-invite-${s}" "grid.praxis.fast/site=${s}" --overwrite >/dev/null
-  [[ $s == "$HUB" ]] || copy_secret "$HUB" grid grid-swim-key key "$s" grid grid-swim-key
+  # No --wait: the operator is ready only once it holds an identity, and it redeems
+  # the invite only once its GridNetwork exists, which grid-site declares next.
   h "$s" upgrade --install grid-operator "$CHARTS/grid-operator" -n grid \
-    --values "$HERE/values/${s}-grid-operator.yaml" --wait --timeout 300s
+    --values "$HERE/values/${s}-grid-operator.yaml"
+  h "$s" upgrade --install grid-site "$CHARTS/grid-site" -n grid \
+    --values "$HERE/values/${s}-grid-site.yaml" --wait --timeout 300s
   echo "  waiting for ${s} to enroll"
   for _ in $(seq 1 60); do
     k "$s" -n grid get secret grid-site-identity >/dev/null 2>&1 && break
     sleep 5
   done
   k "$s" -n grid get secret grid-site-identity >/dev/null
+  k "$s" -n grid rollout status deployment/grid-operator --timeout=300s >/dev/null
 done
 
-echo "== site topology, provider gateway, consumer gateway =="
+echo "== provider gateway, consumer gateway =="
 for s in $SITES; do
-  h "$s" upgrade --install grid-site "$CHARTS/grid-site" -n grid \
-    --values "$HERE/values/${s}-grid-site.yaml" --wait --timeout 300s
   h "$s" upgrade --install provider-gateway "$CHARTS/praxis-gateway" -n grid \
     --values "$HERE/values/${s}-provider-gateway.yaml" --wait --timeout 300s
 done

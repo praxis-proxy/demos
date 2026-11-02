@@ -1,11 +1,12 @@
 # Provider gateway for site-a. Admits peers on their SPIFFE ID and forwards to the
-# local Envoy, which is where llm-d picks the pod.
+# local Envoy, which is where llm-d picks the pod. Its load balancer address is
+# also where peers poll this site's signals, on the operator's port 9091.
 
 fullnameOverride: provider-gateway
 
 image:
   repository: ghcr.io/praxis-proxy/grid-gateway
-  tag: v0.2.2
+  tag: v0.3.0-rc.3
   flavor: grid-gateway
   pullPolicy: IfNotPresent
 
@@ -39,6 +40,7 @@ service:
   port: 8443
   annotations:
     metallb.io/loadBalancerIPs: "10.90.0.202"
+    metallb.io/allow-shared-ip: provider-edge
 
 podLabels:
   grid.praxis.fast/provider-site: site-a

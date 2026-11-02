@@ -1,31 +1,42 @@
 # Operator for site-a. It enrolls on first start, redeeming the invite Secret and
 # writing grid-site-identity and grid-ca itself. Nothing hand-mints a certificate.
+#
+# Membership is Local: the GridSite records in site-a-grid-site.yaml are the peer
+# list, and no SWIM runs. Peers poll this site's signals at the provider gateway's
+# address on port 9091, so the signals Service shares that load balancer address.
 
 image:
   repository: ghcr.io/praxis-proxy/grid-operator
-  tag: v0.2.2
+  tag: v0.3.0-rc.3
   pullPolicy: IfNotPresent
+
+site:
+  name: site-a
+
+grid:
+  membership:
+    source: Local
+  peerTrust: spiffe
 
 enrollment:
   enabled: true
-
+  # grid-enrollment runs on this cluster, so the signer is its in-cluster Service.
+  hub: true
 
 signals:
   enabled: true
   peerIntervalSeconds: "2"
+  # Peers serve signals on this port at their gateway address.
+  peerEndpointPort: 9091
+  # Sharing the address with the gateway needs Cluster traffic policy, so every
+  # peer arrives from a node address; the per-source handshake cap must allow that.
+  maxHandshakesPerSource: 64
   service:
-    annotations:
-      metallb.io/loadBalancerIPs: "10.90.0.204"
-
-swim:
-  siteName: site-a
-
-  service:
-    enabled: true
     type: LoadBalancer
-    port: 7946
+    externalTrafficPolicy: Cluster
     annotations:
-      metallb.io/loadBalancerIPs: "10.90.0.201"
+      metallb.io/loadBalancerIPs: "10.90.0.202"
+      metallb.io/allow-shared-ip: provider-edge
 
 gateway:
   serviceName: provider-gateway
