@@ -15,8 +15,8 @@ crosses the grid.
 | llm-d Router | llm-d-router-endpoint-picker, the ext_proc backend |
 | vLLM | llm-d-inference-sim, two pods per site, one InferencePool |
 
-Both sites enroll: site-a runs the enrollment service, and each operator redeems
-an invite and writes its own identity. Nothing hand-mints a certificate.
+The hub, site-a, issues both identities from one Grid CA with cert-manager and
+delivers them. No enrollment service runs and nothing hand-mints a certificate.
 Membership is Local: each site's values list its peers as GridSite records, and
 no SWIM runs. Signals travel by direct mTLS pull.
 
@@ -28,6 +28,7 @@ GitOps. See "What is managed by hand under Local" below.
 ## Prerequisites
 
 kubectl, helm, kind, podman, and a grid checkout at the release being installed.
+cert-manager runs on the hub, and `up.sh` installs it.
 
 ## Install
 
@@ -42,8 +43,8 @@ What it runs, in order. Only what differs per cluster is set; chart defaults
 cover the rest.
 
 Two kind clusters on one podman network, MetalLB in each with a pool of its
-own, and a CoreDNS entry so both clusters resolve the hub's enrollment address.
-Those four are the only steps no chart can express.
+own, and cert-manager on the hub. Those three are the only steps no chart can
+express.
 
 **The llm-d layer**, one chart per site. The sites differ by one key:
 
@@ -61,68 +62,81 @@ helm upgrade --install llmd-site ./charts/llmd-site \
   --set site=site-b
 ```
 
-**Enrollment**, on the hub only, in its own namespace because that namespace
-holds the Grid CA key:
+**Identity**, issued on the hub only, in its own namespace because that
+namespace holds the Grid CA key. The chart runs in external mode: no enrollment
+service, no invites. cert-manager generates the CA and issues one leaf per
+listed site:
 
 ```bash
 helm upgrade --install grid-enrollment "$GRID_REPO/charts/grid-enrollment" \
   --kube-context kind-grid-llmd-site-a \
   --namespace grid-enrollment \
   --create-namespace \
-  --set host=enroll.grid.demo \
-  --set invites.site-a.network=grid-llmd \
-  --set invites.site-b.network=grid-llmd \
+  --set mode=external \
   --set grid.membership.source=Local \
-  --set enrollment.service.type=LoadBalancer \
-  --set enrollment.service.annotations."metallb\.io/loadBalancerIPs"=10.90.0.205
+  --set external.certManager.enabled=true \
+  --set external.certManager.issuer.create=true \
+  --set external.certManager.ca.mode=Generate \
+  --set external.sites.site-a.secretName=grid-site-a \
+  --set external.sites.site-b.secretName=grid-site-b
 ```
 
-**Carrying the invite into the operator.** The enrollment chart mints one
-Secret per invite, `grid-invite-<site>`, in the hub's `grid-enrollment`
-namespace. The site operator looks for a Secret of that same name in its own
-namespace, carrying the site label, and refuses a token labelled for another
-site:
+Each leaf lasts 180 days and carries the names a peer verifies: the SPIFFE ID,
+`<name>.grid.internal`, and under Local `<name>-signals.grid.internal` as well.
+The CA key stays in `grid-ca-key` on the hub, and the chart marks it to survive
+an uninstall.
+
+## Delivering an identity to a site
+
+The operator reads `tls.crt` and `tls.key` from `grid-site-identity` and `ca.crt`
+from `grid-ca`, both in its own namespace. The issued Secret on the hub holds all
+three, so delivery is reading them there and writing two Secrets on the site:
 
 ```bash
-# 1. read the invite from the hub
-kubectl --context "$HUB" \
-  --namespace grid-enrollment \
-  get secret grid-invite-site-b \
-  --output go-template='{{index .data "token"}}' \
-  | base64 --decode > invite-site-b.token
+# 1. read the issued leaf and the CA from the hub
+for key in tls.crt tls.key ca.crt; do
+  kubectl --context "$HUB" \
+    --namespace grid-enrollment \
+    get secret grid-site-b \
+    --output go-template="{{index .data \"$key\"}}" \
+    | base64 --decode > "site-b.$key"
+done
 
-# 2. create it on the site, under the name the operator looks for
+# 2. the identity, under the name the operator reads
 kubectl --context "$SITE" \
   --namespace grid \
-  create secret generic grid-invite-site-b \
-  --from-file=token=invite-site-b.token
+  create secret tls grid-site-identity \
+  --cert=site-b.tls.crt --key=site-b.tls.key
 
-# 3. label it, which is what the operator checks before redeeming
+# 3. the Grid CA beside it
 kubectl --context "$SITE" \
   --namespace grid \
-  label secret grid-invite-site-b \
-  grid.praxis.fast/site=site-b
+  create secret generic grid-ca \
+  --from-file=ca.crt=site-b.ca.crt
 
-rm invite-site-b.token
+rm site-b.tls.key
 ```
 
-One more Secret travels the same way: `grid-ca-bundle` from `grid-enrollment`,
-which is what the site checks the enrollment service against. The operator reads
-it only under its label, so label it too:
+Confirm the identity carries the SPIFFE ID the rest of the grid authorizes on:
 
 ```bash
-kubectl --context "$SITE" \
-  --namespace grid \
-  label secret grid-ca-bundle \
-  grid.praxis.fast/signer-bundle=true
+kubectl -n grid get secret grid-site-identity \
+  -o go-template='{{index .data "tls.crt"}}' \
+  | base64 -d \
+  | openssl x509 -noout -subject -ext subjectAltName
 ```
 
-A fleet delivers both over one protected channel, with ACM or External Secrets.
-Never commit an invite.
+```
+subject=CN=site-b, O=site-b
+X509v3 Subject Alternative Name:
+    DNS:site-b.grid.internal, DNS:site-b-signals.grid.internal, URI:spiffe://grid.internal/site/site-b
+```
 
-**The operator redeems it** once its GridNetwork exists, and writes its own
-identity. The enrollment names below are chart defaults, spelled out so the
-flow is visible:
+In a fleet an ACM or OCM policy delivers these two Secrets to every selected
+cluster, which is what the ai-grid hub does. Never commit a key.
+
+**The operator** enrolls nothing. It names no signer and renders no operator
+config, and it reads the identity it was given once its GridNetwork exists:
 
 ```bash
 helm upgrade --install grid-operator "$GRID_REPO/charts/grid-operator" \
@@ -131,12 +145,6 @@ helm upgrade --install grid-operator "$GRID_REPO/charts/grid-operator" \
   --set site.name=site-b \
   --set grid.membership.source=Local \
   --set grid.peerTrust=spiffe \
-  --set enrollment.enabled=true \
-  --set enrollment.url=https://enroll.grid.demo:8443 \
-  --set enrollment.tokenSecretRef.name=grid-invite-site-b \
-  --set enrollment.caBundle.secret=grid-ca-bundle \
-  --set enrollment.identitySecretName=grid-site-identity \
-  --set enrollment.caSecretName=grid-ca \
   --set signals.peerEndpointPort=9091 \
   --set signals.maxHandshakesPerSource=64 \
   --set signals.service.type=LoadBalancer \
@@ -149,8 +157,7 @@ helm upgrade --install grid-operator "$GRID_REPO/charts/grid-operator" \
 
 `grid.membership.source=Local` runs no SWIM: no SWIM Service, port, seeds or
 key, and the chart refuses any value that still sets one. It also turns poll
-signals on. The hub operator sets `enrollment.hub=true` in place of a URL and
-enrolls through the in-cluster enrollment Service.
+signals on.
 
 Peers poll this site's signals at its gateway address, under
 `site-b-signals.grid.internal`, on `signals.peerEndpointPort`. So the signals
@@ -160,10 +167,14 @@ Services. Sharing needs `externalTrafficPolicy` Cluster, which puts every peer
 behind a node address, and the operator caps handshakes per source address, so
 the cap is raised to cover the grid.
 
-The invite is one-time. If `grid-site-identity` is deleted the operator retries
-a spent token, so do not let Argo prune it.
+The GridNetwork reports `Enrolled` True with the message that the identity was
+provisioned outside the signer, and `IdentityValid` True with the expiry. Renewal
+is cert-manager on the hub renewing the Certificate, then the new Secret
+delivered again, which the ACM policy does in a fleet. The operator renews
+nothing itself, so `RotationOnSchedule` says so and turns `False` once the
+identity is within its renewal window without a redelivery.
 
-**The site topology** is what the operator waits for before it enrolls, so it
+**The site topology** is what the operator waits for before it serves, so it
 follows at once. It carries structured values, so it reads better as a file
 than as `--set`:
 
@@ -180,23 +191,7 @@ the peer. Under Local the peer's GridSite is named `site-a`, not the
 gateway address. A peer whose signals are not at that address sets
 `signalsEndpoint` on its entry.
 
-Wait for `grid-site-identity` to appear, then confirm it carries the SPIFFE ID
-the rest of the grid authorizes on:
-
-```bash
-kubectl -n grid get secret grid-site-identity \
-  -o go-template='{{index .data "tls.crt"}}' \
-  | base64 -d \
-  | openssl x509 -noout -subject -ext subjectAltName
-```
-
-```
-subject=CN=site-b, O=site-b
-X509v3 Subject Alternative Name:
-    DNS:site-b.grid.internal, URI:spiffe://grid.internal/site/site-b
-```
-
-**The two gateways** come last, once the identity they mount exists:
+**The two gateways** come last:
 
 ```bash
 helm upgrade --install provider-gateway "$GRID_REPO/charts/praxis-gateway" \
@@ -245,10 +240,10 @@ nothing discovers anything, so these now come from outside the grid:
 - Nothing else carries a peer address. The consumer gateways list no backends,
   so the operator's dial file, derived from the same GridSite records, is the
   only place a peer's gateway is dialed from.
-- Identity is unchanged. The invite and the CA bundle still cross clusters, the
-  operator still redeems the invite and writes `grid-site-identity` and
-  `grid-ca`. Local changes how a site learns its members, not where it gets its
-  identity.
+- The identity Secrets and the CA bundle. The hub issues `grid-site-<name>` per
+  site, and `grid-site-identity` and `grid-ca` in each site's `grid` namespace
+  are copies of it, delivered before the operator starts and delivered again on
+  renewal. The operator enrolls nothing and names no signer.
 
 In a fleet, ACM or OCM policies place the same GridSite records on every cluster
 in a cluster set, or Argo CD and plain GitOps deliver the same files. Here it is
@@ -335,7 +330,8 @@ it was started with and swaps the running configuration in place.
 **Serving data applies on its own.** The operator rewrites the serving
 ConfigMap whenever the topology moves: a peer goes Active, a provider appears
 or leaves, an address changes. The gateway re-reads it every five seconds. That
-is how the second site's candidate arrives after enrollment, with no rollout.
+is how the second site's candidate arrives once its GridSite is Active, with no
+rollout.
 
 **Editing the config reloads it in place.** Change the mounted ConfigMap and
 the running process swaps the new configuration once the kubelet refreshes the
@@ -386,10 +382,10 @@ ConfigMap the operator writes, `grid-serving-grid-llmd-consumer-gateway`, as
 The provider gateway and the signals endpoint share one address per site, the
 gateway on 8443 and signals on 9091.
 
-| Site | Provider and signals | Consumer | Enrollment |
-|---|---|---|---|
-| site-a | 10.90.0.202 | 10.90.0.203 | 10.90.0.205 |
-| site-b | 10.90.0.222 | 10.90.0.223 | n/a |
+| Site | Provider and signals | Consumer |
+|---|---|---|
+| site-a | 10.90.0.202 | 10.90.0.203 |
+| site-b | 10.90.0.222 | 10.90.0.223 |
 
 ## Teardown
 

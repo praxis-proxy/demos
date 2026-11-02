@@ -1,5 +1,5 @@
-# Operator for site-a. It enrolls on first start, redeeming the invite Secret and
-# writing grid-site-identity and grid-ca itself. Nothing hand-mints a certificate.
+# Operator for site-a. It enrolls nothing: its identity, grid-site-identity and
+# grid-ca, was issued on the hub and delivered to this namespace before it started.
 #
 # Membership is Local: the GridSite records in site-a-grid-site.yaml are the peer
 # list, and no SWIM runs. Peers poll this site's signals at the provider gateway's
@@ -17,11 +17,6 @@ grid:
   membership:
     source: Local
   peerTrust: spiffe
-
-enrollment:
-  enabled: true
-  # grid-enrollment runs on this cluster, so the signer is its in-cluster Service.
-  hub: true
 
 signals:
   enabled: true
