@@ -17,7 +17,13 @@ crosses the grid.
 
 Both sites enroll: site-a runs the enrollment service, and each operator redeems
 an invite and writes its own identity. Nothing hand-mints a certificate.
-Signals travel by direct mTLS pull, not the gossip overlay.
+Membership is Local: each site's values list its peers as GridSite records, and
+no SWIM runs. Signals travel by direct mTLS pull.
+
+Local membership means the grid has no discovery. A site knows exactly the peers
+its own configuration lists, and something outside the grid delivers those
+GridSite records to every member: here the values files, in a fleet ACM or
+GitOps. See "What is managed by hand under Local" below.
 
 ## Prerequisites
 
@@ -66,6 +72,7 @@ helm upgrade --install grid-enrollment "$GRID_REPO/charts/grid-enrollment" \
   --set host=enroll.grid.demo \
   --set invites.site-a.network=grid-llmd \
   --set invites.site-b.network=grid-llmd \
+  --set grid.membership.source=Local \
   --set enrollment.service.type=LoadBalancer \
   --set enrollment.service.annotations."metallb\.io/loadBalancerIPs"=10.90.0.205
 ```
@@ -99,39 +106,82 @@ kubectl --context "$SITE" \
 rm invite-site-b.token
 ```
 
-Two more Secrets travel the same way: `grid-ca-bundle` from `grid-enrollment`,
-which is what the site checks the enrollment service against, and the shared
-`grid-swim-key`. A fleet delivers all three over one protected channel, with
-ACM or External Secrets. Never commit an invite or the SWIM key.
+One more Secret travels the same way: `grid-ca-bundle` from `grid-enrollment`,
+which is what the site checks the enrollment service against. The operator reads
+it only under its label, so label it too:
 
-**The operator redeems it** on first start and writes its own identity. The
-enrollment names below are chart defaults, spelled out so the flow is visible:
+```bash
+kubectl --context "$SITE" \
+  --namespace grid \
+  label secret grid-ca-bundle \
+  grid.praxis.fast/signer-bundle=true
+```
+
+A fleet delivers both over one protected channel, with ACM or External Secrets.
+Never commit an invite.
+
+**The operator redeems it** once its GridNetwork exists, and writes its own
+identity. The enrollment names below are chart defaults, spelled out so the
+flow is visible:
 
 ```bash
 helm upgrade --install grid-operator "$GRID_REPO/charts/grid-operator" \
   --kube-context "$SITE" \
   --namespace grid \
+  --set site.name=site-b \
+  --set grid.membership.source=Local \
+  --set grid.peerTrust=spiffe \
   --set enrollment.enabled=true \
   --set enrollment.url=https://enroll.grid.demo:8443 \
-  --set enrollment.siteName=site-b \
   --set enrollment.tokenSecretRef.name=grid-invite-site-b \
   --set enrollment.caBundle.secret=grid-ca-bundle \
   --set enrollment.identitySecretName=grid-site-identity \
   --set enrollment.caSecretName=grid-ca \
-  --set swim.siteName=site-b \
-  --set swim.seeds=10.90.0.201:7946 \
-  --set swim.service.type=LoadBalancer \
-  --set swim.service.annotations."metallb\.io/loadBalancerIPs"=10.90.0.221 \
-  --set signals.enabled=true \
-  --set signals.service.annotations."metallb\.io/loadBalancerIPs"=10.90.0.224 \
+  --set signals.peerEndpointPort=9091 \
+  --set signals.maxHandshakesPerSource=64 \
+  --set signals.service.type=LoadBalancer \
+  --set signals.service.externalTrafficPolicy=Cluster \
+  --set signals.service.annotations."metallb\.io/loadBalancerIPs"=10.90.0.222 \
+  --set signals.service.annotations."metallb\.io/allow-shared-ip"=provider-edge \
   --set gateway.serviceName=provider-gateway \
   --set gateway.port=8443
 ```
 
+`grid.membership.source=Local` runs no SWIM: no SWIM Service, port, seeds or
+key, and the chart refuses any value that still sets one. It also turns poll
+signals on. The hub operator sets `enrollment.hub=true` in place of a URL and
+enrolls through the in-cluster enrollment Service.
+
+Peers poll this site's signals at its gateway address, under
+`site-b-signals.grid.internal`, on `signals.peerEndpointPort`. So the signals
+Service shares the provider gateway's load balancer address, and
+`metallb.io/allow-shared-ip` is what lets MetalLB hand one address to two
+Services. Sharing needs `externalTrafficPolicy` Cluster, which puts every peer
+behind a node address, and the operator caps handshakes per source address, so
+the cap is raised to cover the grid.
+
 The invite is one-time. If `grid-site-identity` is deleted the operator retries
 a spent token, so do not let Argo prune it.
 
-Confirm the identity carries the SPIFFE ID the rest of the grid authorizes on:
+**The site topology** is what the operator waits for before it enrolls, so it
+follows at once. It carries structured values, so it reads better as a file
+than as `--set`:
+
+```bash
+helm upgrade --install grid-site "$GRID_REPO/charts/grid-site" \
+  --kube-context "$SITE" \
+  --namespace grid \
+  --values values/site-b-grid-site.yaml
+```
+
+`grid-site` sets `signalTransport: poll` and `peerTrust: spiffe`, and declares
+the peer. Under Local the peer's GridSite is named `site-a`, not the
+`grid-llmd-site-a` SWIM discovery would have given it, and carries the peer's
+gateway address. A peer whose signals are not at that address sets
+`signalsEndpoint` on its entry.
+
+Wait for `grid-site-identity` to appear, then confirm it carries the SPIFFE ID
+the rest of the grid authorizes on:
 
 ```bash
 kubectl -n grid get secret grid-site-identity \
@@ -146,16 +196,9 @@ X509v3 Subject Alternative Name:
     DNS:site-b.grid.internal, URI:spiffe://grid.internal/site/site-b
 ```
 
-Wait for `grid-site-identity` to appear, then the site topology and the two
-gateways. These carry structured values, so they read better as files than as
-`--set`:
+**The two gateways** come last, once the identity they mount exists:
 
 ```bash
-helm upgrade --install grid-site "$GRID_REPO/charts/grid-site" \
-  --kube-context "$SITE" \
-  --namespace grid \
-  --values values/site-b-grid-site.yaml
-
 helm upgrade --install provider-gateway "$GRID_REPO/charts/praxis-gateway" \
   --kube-context "$SITE" \
   --namespace grid \
@@ -167,10 +210,14 @@ helm upgrade --install consumer-gateway "$GRID_REPO/charts/praxis-gateway" \
   --values values/site-b-consumer-gateway.yaml
 ```
 
-`grid-site` sets `signalTransport: poll` and `peerTrust: spiffe`, and declares
-the peer. The provider gateway admits peers by SPIFFE ID and forwards to the
-local Envoy. The consumer gateway turns on `gridServing`, which is what makes
-the chart render `grid_site_route` instead of the overlay route.
+The provider gateway admits peers by SPIFFE ID and forwards to the local Envoy.
+The consumer gateway turns on `gridServing`, which is what makes the chart
+render `grid_site_route` instead of the overlay route, and lists no backends.
+Every upstream comes from the dial file the operator publishes beside the
+serving config: the local provider direct, and each peer through its provider
+gateway at the address its GridSite declares. A backend listed in the values
+under the same cluster name would be a second opinion on that dial, and the
+gateway refuses a dial that changes a cluster's verified TLS identity.
 
 **The front door**, which mints a caller key and prints it:
 
@@ -178,6 +225,34 @@ the chart render `grid_site_route` instead of the overlay route.
 CTX_A=kind-grid-llmd-site-a CTX_B=kind-grid-llmd-site-b NET=grid-llmd-net \
   ./litellm/start-litellm.sh
 ```
+
+## What is managed by hand under Local
+
+Under SWIM each operator found its peers by gossip. It needed a seed address and
+the shared key, and it created the peer's GridSite itself, named
+`grid-llmd-<name>`, with the gateway address the peer advertised. Under Local
+nothing discovers anything, so these now come from outside the grid:
+
+- The peer GridSite records. The `peers` map in each `grid-site` values file is
+  one GridSite per peer, named after the peer, with the peer's gateway address.
+  A new site means adding it to every other site's values and upgrading
+  `grid-site` there. A site missing from a values file is a site that cluster
+  never reaches.
+- The signals endpoint each peer is polled at. It is derived from the peer's
+  gateway address and the operator's `signals.peerEndpointPort`, so the provider
+  gateway and the signals Service share one address, or the peer entry sets
+  `signalsEndpoint`.
+- Nothing else carries a peer address. The consumer gateways list no backends,
+  so the operator's dial file, derived from the same GridSite records, is the
+  only place a peer's gateway is dialed from.
+- Identity is unchanged. The invite and the CA bundle still cross clusters, the
+  operator still redeems the invite and writes `grid-site-identity` and
+  `grid-ca`. Local changes how a site learns its members, not where it gets its
+  identity.
+
+In a fleet, ACM or OCM policies place the same GridSite records on every cluster
+in a cluster set, or Argo CD and plain GitOps deliver the same files. Here it is
+the values files and `up.sh`.
 
 ## Verify
 
@@ -196,13 +271,14 @@ The response headers carry the whole path:
 | Header | Meaning |
 |---|---|
 | `x-litellm-model-id` | which consumer gateway the front door entered |
-| `via: 1.1 praxis, 1.1 praxis` | two Grid hops, consumer then provider |
+| `via` | one `1.1 praxis` when the entry site serves it, two when the request crosses to the other site's provider gateway |
 | `x-grid-site` | the site Grid chose to serve it |
 | `x-grid-backend` | the candidate it chose |
 | `x-went-into-resp-headers` | the endpoint picker ran, so ext_proc reached llm-d |
 
-Send a few and the entry site and serving site differ on some of them. That is
-the cross-site hop: litellm picks the entry, Grid picks the site.
+Send a few and the entry site and serving site differ on some of them, with
+two hops in `via`. That is the cross-site hop: litellm picks the entry, Grid
+picks the site. litellm returns the upstream headers prefixed `llm_provider-`.
 
 ## Prefix affinity
 
@@ -301,12 +377,19 @@ kubectl --namespace grid get configmap consumer-gateway-config \
   | grep --after-context=8 grid_site_route
 ```
 
+The candidates and the dials are not in that file. They are in the serving
+ConfigMap the operator writes, `grid-serving-grid-llmd-consumer-gateway`, as
+`serving-config.json` and `dial.json`.
+
 ## Addresses
 
-| Site | SWIM | Signals | Provider | Consumer | Enrollment |
-|---|---|---|---|---|---|
-| site-a | 10.90.0.201 | 10.90.0.204 | 10.90.0.202 | 10.90.0.203 | 10.90.0.205 |
-| site-b | 10.90.0.221 | 10.90.0.224 | 10.90.0.222 | 10.90.0.223 | n/a |
+The provider gateway and the signals endpoint share one address per site, the
+gateway on 8443 and signals on 9091.
+
+| Site | Provider and signals | Consumer | Enrollment |
+|---|---|---|---|
+| site-a | 10.90.0.202 | 10.90.0.203 | 10.90.0.205 |
+| site-b | 10.90.0.222 | 10.90.0.223 | n/a |
 
 ## Teardown
 

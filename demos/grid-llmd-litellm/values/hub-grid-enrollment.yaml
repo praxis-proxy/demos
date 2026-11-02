@@ -1,15 +1,20 @@
 # Enrollment runs only on the hub cluster, in its own namespace, because that
-# namespace holds the Grid CA key. It mints one invite per site.
+# namespace holds the Grid CA key. It mints one invite per site. Membership is
+# Local, so it creates no SWIM key.
 
 image:
   repository: ghcr.io/praxis-proxy/grid-enrollment
-  tag: v0.2.2
+  tag: v0.3.0-rc.3
   pullPolicy: IfNotPresent
 
 host: enroll.grid.demo
 
 route:
   enabled: false
+
+grid:
+  membership:
+    source: Local
 
 enrollment:
   service:

@@ -1,5 +1,7 @@
-# Site topology for site-a. Signals travel by direct mTLS pull and peers are
-# authorized on their SPIFFE ID. Both are read at operator start.
+# Site topology for site-a. Membership is Local: the peers map below is this site's
+# whole view of the grid, one GridSite per peer, named after the peer. Nothing
+# discovers a site that is not listed here. Signals travel by direct mTLS pull
+# and peers are authorized on their SPIFFE ID. All three are read at operator start.
 
 gridNetwork:
   name: grid-llmd
@@ -19,12 +21,18 @@ gridNetwork:
       namespace: grid
       siteName: site-a
 
+grid:
+  membership:
+    source: Local
+
 gridSite:
   name: site-a
   region: site-a
   zone: site-a-1
   providerSiteLabel: site-a
 
+# The peer's gateway address. Its signals are polled at the same host on the
+# operator's signals.peerEndpointPort, under <name>-signals.grid.internal.
 peers:
   site-b:
     address: 10.90.0.222:8443
