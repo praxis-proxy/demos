@@ -1,29 +1,26 @@
-# Enrollment runs only on the hub cluster, in its own namespace, because that
-# namespace holds the Grid CA key. It mints one invite per site. Membership is
-# Local, so it creates no SWIM key.
+# Identity for the grid, issued on the hub cluster in its own namespace, because
+# that namespace holds the Grid CA key. External mode runs no enrollment service:
+# cert-manager generates the CA and issues one leaf per listed site, each carrying
+# spiffe://grid.internal/site/<name>, <name>.grid.internal and, under Local,
+# <name>-signals.grid.internal. Delivering the issued Secrets to the sites is
+# something outside the grid, here up.sh, in a fleet an ACM or OCM policy.
 
-image:
-  repository: ghcr.io/praxis-proxy/grid-enrollment
-  tag: v0.3.0-rc.3
-  pullPolicy: IfNotPresent
-
-host: enroll.grid.demo
-
-route:
-  enabled: false
+mode: external
 
 grid:
   membership:
     source: Local
 
-enrollment:
-  service:
-    type: LoadBalancer
-    annotations:
-      metallb.io/loadBalancerIPs: "10.90.0.205"
-
-invites:
-  site-a:
-    network: grid-llmd
-  site-b:
-    network: grid-llmd
+external:
+  sites:
+    site-a:
+      secretName: grid-site-a
+    site-b:
+      secretName: grid-site-b
+  certManager:
+    enabled: true
+    issuer:
+      create: true
+    ca:
+      # Generate is for a new grid. An existing CA is mode Existing with its key in secretName.
+      mode: Generate

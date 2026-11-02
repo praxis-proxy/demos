@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Two Grid sites over llm-d, behind a litellm front door.
 #
-# site-a is the hub: it runs enrollment, so both sites get their identity from
-# the Grid CA rather than from a hand-minted certificate. Membership is Local: each
-# site's values list its peers as GridSite records, and no SWIM runs. Peers are
+# site-a is the hub: cert-manager there issues both sites' identities from one
+# Grid CA, and this script delivers each to its site, standing in for the ACM or
+# OCM policy that does it in a fleet. No enrollment service runs. Membership is
+# Local: each site's values list its peers as GridSite records, and no SWIM runs. Peers are
 # authorized on their SPIFFE ID, signals travel by direct mTLS pull, and each
 # consumer gateway routes with grid_site_route over the operator-published
 # serving config.
@@ -17,8 +18,7 @@ SUBNET=${SUBNET:-10.90.0.0/24}
 HUB=site-a
 SITES=${SITES:-"site-a site-b"}
 METALLB=${METALLB:-https://raw.githubusercontent.com/metallb/metallb/v0.14.9/config/manifests/metallb-native.yaml}
-ENROLL_HOST=enroll.grid.demo
-ENROLL_IP=10.90.0.205
+CERT_MANAGER=${CERT_MANAGER:-https://github.com/cert-manager/cert-manager/releases/download/v1.16.2/cert-manager.yaml}
 
 # One pool per site. A shared pool on a shared L2 network hands the same address
 # to both clusters, and the second claimant silently wins.
@@ -63,18 +63,10 @@ EOF
   k "$s" -n metallb-system get ipaddresspool grid-llmd >/dev/null
 done
 
-echo "== enrollment host resolves in both clusters =="
-for s in $SITES; do
-  k "$s" -n kube-system get configmap coredns -o yaml \
-    | python3 -c "
-import sys,yaml
-d=yaml.safe_load(sys.stdin)
-cf=d['data']['Corefile']
-if '$ENROLL_HOST' not in cf:
-    cf=cf.replace('ready', 'ready\n    hosts {\n        $ENROLL_IP $ENROLL_HOST\n        fallthrough\n    }',1)
-    d['data']['Corefile']=cf
-print(yaml.safe_dump(d))" | k "$s" apply -f - >/dev/null
-  k "$s" -n kube-system rollout restart deployment/coredns >/dev/null
+echo "== cert-manager on the hub =="
+k "$HUB" apply -f "$CERT_MANAGER" >/dev/null
+for d in cert-manager cert-manager-webhook cert-manager-cainjector; do
+  k "$HUB" -n cert-manager rollout status "deployment/$d" --timeout=300s >/dev/null
 done
 
 echo "== the llm-d layer, one chart per site =="
@@ -84,38 +76,49 @@ for s in $SITES; do
     --set site="$s" --wait --timeout 300s
 done
 
-echo "== enrollment on the hub =="
-h "$HUB" upgrade --install grid-enrollment "$CHARTS/grid-enrollment" \
-  -n grid-enrollment --create-namespace --values "$HERE/values/hub-grid-enrollment.yaml" \
-  --wait --timeout 300s
+echo "== identities, issued on the hub =="
+# The webhook admits Certificates a little after its rollout reports ready.
+for _ in $(seq 1 30); do
+  if h "$HUB" upgrade --install grid-enrollment "$CHARTS/grid-enrollment" \
+      -n grid-enrollment --create-namespace --values "$HERE/values/hub-grid-enrollment.yaml" >/dev/null 2>&1
+  then break; fi
+  sleep 5
+done
+# The issued Secret is grid-<site>, the secretName the hub values give each site.
+for s in $SITES; do
+  for _ in $(seq 1 60); do
+    k "$HUB" -n grid-enrollment get secret "grid-${s}" >/dev/null 2>&1 && break
+    sleep 5
+  done
+  k "$HUB" -n grid-enrollment get secret "grid-${s}" >/dev/null
+done
 
-echo "== operators and site topology, each site enrolling for its own identity =="
+echo "== identities delivered, then an operator and the site topology per site =="
+secret_key() { # <ctx> <ns> <secret> <key>: go-template, not jsonpath, since a key like ca.crt has a dot in it.
+  k "$1" -n "$2" get secret "$3" -o go-template="{{index .data \"$4\"}}" | base64 -d
+}
 copy_secret() {
   local from=$1 fromns=$2 name=$3 key=$4 to=$5 tons=$6 target=$7
-  # go-template, not jsonpath: a key like ca.crt has a dot in it.
-  k "$from" -n "$fromns" get secret "$name" -o go-template="{{index .data \"$key\"}}" | base64 -d \
+  secret_key "$from" "$fromns" "$name" "$key" \
     | k "$to" -n "$tons" create secret generic "$target" --from-file="$key"=/dev/stdin \
       --dry-run=client -o yaml | k "$to" apply -f - >/dev/null
 }
-# Two Secrets cross clusters: the CA bundle the site checks the signer against,
-# and the site's one-time invite. The operator reads each only under its label.
+# Two Secrets cross clusters, the site's identity and the Grid CA, the same two
+# an ACM or OCM policy places on every selected cluster in a fleet. The operator
+# reads tls.crt and tls.key from grid-site-identity and ca.crt from grid-ca.
+WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 for s in $SITES; do
-  copy_secret "$HUB" grid-enrollment grid-ca-bundle ca.crt "$s" grid grid-ca-bundle
-  k "$s" -n grid label secret grid-ca-bundle "grid.praxis.fast/signer-bundle=true" --overwrite >/dev/null
-  copy_secret "$HUB" grid-enrollment "grid-invite-${s}" token "$s" grid "grid-invite-${s}"
-  k "$s" -n grid label secret "grid-invite-${s}" "grid.praxis.fast/site=${s}" --overwrite >/dev/null
-  # No --wait: the operator is ready only once it holds an identity, and it redeems
-  # the invite only once its GridNetwork exists, which grid-site declares next.
+  secret_key "$HUB" grid-enrollment "grid-${s}" tls.crt > "$WORK/${s}.crt"
+  secret_key "$HUB" grid-enrollment "grid-${s}" tls.key > "$WORK/${s}.key"
+  k "$s" -n grid create secret tls grid-site-identity --cert="$WORK/${s}.crt" --key="$WORK/${s}.key" \
+    --dry-run=client -o yaml | k "$s" apply -f - >/dev/null
+  rm -f "$WORK/${s}.key"
+  copy_secret "$HUB" grid-enrollment "grid-${s}" ca.crt "$s" grid grid-ca
+  # No --wait: the operator serves nothing until its GridNetwork exists, which grid-site declares next.
   h "$s" upgrade --install grid-operator "$CHARTS/grid-operator" -n grid \
     --values "$HERE/values/${s}-grid-operator.yaml"
   h "$s" upgrade --install grid-site "$CHARTS/grid-site" -n grid \
     --values "$HERE/values/${s}-grid-site.yaml" --wait --timeout 300s
-  echo "  waiting for ${s} to enroll"
-  for _ in $(seq 1 60); do
-    k "$s" -n grid get secret grid-site-identity >/dev/null 2>&1 && break
-    sleep 5
-  done
-  k "$s" -n grid get secret grid-site-identity >/dev/null
   k "$s" -n grid rollout status deployment/grid-operator --timeout=300s >/dev/null
 done
 
