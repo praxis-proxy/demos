@@ -18,8 +18,10 @@ full APL (Authorization Policy Logic) stack:
 - on-the-wire body rewriting (`redact(args.ssn)`; the upstream never sees the value)
 - PII scanning on tool arguments
 - structured audit emission
-- session taint (cross-tool, cross-request data-flow control)
+- session taint (cross-tool, cross-request, cross-primitive data-flow control)
 - human-in-the-loop approval (out-of-band manager sign-off over OIDC CIBA)
+- all three MCP primitives: tool, prompt, and resource routes with the same
+  policy pipeline
 
 ## Watch it run
 
@@ -102,8 +104,10 @@ off. See [Human-in-the-loop: manager approval](#human-in-the-loop-manager-approv
 |   keycloak  policy-demo realm: bob/alice/eve users;              |
 |             praxis-gateway / workday-api / github-api clients;   |
 |             STE v2; CIBA                                         |
-|   hr-mcp    mock MCP server: get_compensation, send_email,       |
-|             search_repos, adjust_compensation                    |
+|   hr-mcp    mock MCP server: tools (get_compensation, send_email,|
+|             search_repos, adjust_compensation), prompts          |
+|             (summarize-report, onboarding-checklist), resources  |
+|             (hr://employees/compensation, hr://employees/directory)|
 |   valkey    :6379, engine session store: taint labels keyed by   |
 |             H(subject:session_id), durable across gateway restart|
 |   auth-     :5001, CIBA approval UI ("the manager's phone");     |
@@ -217,8 +221,10 @@ deliberately, and re-run the scenarios when you do.
 
 ## Scenarios
 
-Twelve scenarios cover every feature in the filter. Run any one directly, for
+Twenty-two scenarios cover every feature in the filter. Run any one directly, for
 example `./scenarios/01-bob-allow.sh`.
+
+### Tool scenarios (01–12)
 
 | # | Scenario | Demonstrates |
 |---|----------|---|
@@ -234,6 +240,21 @@ example `./scenarios/01-bob-allow.sh`.
 | 10 | Bob adjusts compensation by ≤ $10k | Below the threshold: `adjust_compensation` applies immediately, no approval |
 | 11 | Bob adjusts compensation by > $10k | Human-in-the-loop: the gateway suspends with `-32120`, Alice approves out-of-band (CIBA), then it applies |
 | 12 | Bob calls `get_compensation`, then again spoofing an asserted header | `assertions:` renders identity into upstream headers, strips his raw token, and refuses to forward a header he set himself |
+
+### Prompt and resource scenarios (13–22)
+
+| # | Scenario | Demonstrates |
+|---|----------|---|
+| 13 | Bob (HR) retrieves the `summarize-report` prompt | Prompt allow — `require(role.hr)` passes via `cmf.prompt_pre_invoke` |
+| 14 | Alice (engineer) retrieves the same prompt | Prompt deny — `require(role.hr)` blocks, JSON-RPC error |
+| 15 | Bob reads `hr://employees/compensation` resource | Resource allow — identity resolves, data returned, session tainted |
+| 16 | Eve reads `hr://employees/compensation` resource | Resource `result:` redaction — **\[KNOWN GAP\]** SSN not stripped (issue 75) |
+| 17 | Eve retrieves prompt with `include_ssn=true` | Prompt `result:` redaction — **\[KNOWN GAP\]** SSN not stripped (issue 75) |
+| 18 | Bob reads resource, then calls `send_email` | Cross-primitive taint — resource `taint(secret, session)` blocks later tool call |
+| 19 | Eve retrieves prompt with SSN in arguments | Prompt `args:` redaction — MCP server receives `[REDACTED]` (works) |
+| 20 | Bob reads resource, checks post-phase taint | Resource post-phase conditional taint — **\[KNOWN GAP\]** `result != ''` is false (issue 75) |
+| 21 | Bob gets prompt, checks post-phase taint | Prompt post-phase conditional taint — **\[KNOWN GAP\]** same gap, cleanest proof (no pre-phase taint) |
+| 22 | Bob calls tool, checks post-phase taint | Tool post-phase conditional taint — **baseline** (works), Valkey confirms `pii_tool` label |
 
 Scenarios 10 and 11 exercise the human-in-the-loop flow described in
 [Human-in-the-loop: manager approval](#human-in-the-loop-manager-approval)
@@ -405,6 +426,74 @@ the same session id. It is still denied. Drop the `session_store` block to fall
 back to the in-process store, which resets on restart. The scenarios use fresh
 per-run session ids either way, so reruns start clean.
 
+## Prompts and resources
+
+Scenarios 01–12 prove the tool surface. Scenarios 13–22 extend the same policy
+model to the other two MCP primitives: **prompts** (`prompts/get`) and
+**resources** (`resources/read`).
+
+The gateway's MCP filter classifies each JSON-RPC method into an entity type.
+PPE matches the entity name against `policy.yaml` routes and fires the
+corresponding CMF hook:
+
+| MCP method | Route selector | CMF hook (pre) | CMF hook (post) |
+|---|---|---|---|
+| `tools/call` | `tool:` | `cmf.tool_pre_invoke` | `cmf.tool_post_invoke` |
+| `prompts/get` | `prompt:` | `cmf.prompt_pre_invoke` | `cmf.prompt_post_invoke` |
+| `resources/read` | `resource:` | `cmf.resource_pre_fetch` | `cmf.resource_post_fetch` |
+
+The policy pipeline — `require()`, `taint()`, `delegate()`, `run()`, field
+redaction — works identically across all three. Only the hook name and route key
+differ.
+
+### What works today
+
+- **Allow/deny** (scenarios 13–15): `require(role.hr)` gates prompt and resource
+  access the same way it gates tool access. Denied requests return the standard
+  JSON-RPC error envelope.
+- **Pre-phase taint** (scenario 18): `taint(secret, session)` on a resource route
+  writes a session label that blocks a subsequent tool call. Taint is
+  entity-type-agnostic — it crosses primitive boundaries.
+- **Prompt args: redaction** (scenario 19): The `args:` block on a prompt route
+  rewrites arguments before the MCP server renders the template. Uses the
+  `PromptRequest` content part, which is fully projected.
+- **Post-phase conditional taint on tools** (scenario 22): A `post_invocation`
+  step that reads `result` works on tool routes because tool `result:` projection
+  is functional. Valkey confirms both `secret` and `pii_tool` labels on the session.
+
+### What doesn't work yet (issue 75)
+
+Four scenarios hit a known gap where `result:` pipelines on prompt and resource
+routes evaluate against an empty string:
+
+- **Resource result: redaction** (scenario 16): Eve should see `[REDACTED]` SSNs
+  but sees the raw values.
+- **Prompt result: redaction** (scenario 17): Same gap on prompts.
+- **Resource post-phase conditional taint** (scenario 20): `result != ''` is
+  always false, so the taint never fires.
+- **Prompt post-phase conditional taint** (scenario 21): Same gap, and the
+  cleanest proof — the prompt route has no pre-phase taint, so the email going
+  through definitively proves the post-phase taint didn't fire.
+
+**Root cause.** Two independent layers are missing:
+
+1. **Praxis filter** (`json_rpc.rs`): `build_response_content_for_method()` only
+   builds `ContentPart` structures for `tools/call` responses. For `resources/read`
+   and `prompts/get`, it returns an empty list. Filed as
+   `issues/issue_praxis_resource_prompt_response_contentpart.md`.
+2. **PPE** (`message_projection.rs`): `extract_result_from_message()` only matches
+   `ContentPart::ToolResult`. No arm for `ContentPart::Resource` or
+   `ContentPart::PromptResult`. Tracked as issue 75; fix plan at
+   `policy/docs/plans/2026-11-02-001-fix-resource-prompt-projection-plan.md`.
+
+All four scenarios print `[KNOWN GAP: issue 75 — ...]` and exit 0 so the
+walkthrough continues. When both fixes land, these scenarios become the
+regression tests.
+
+**Not covered.** List operations (`tools/list`, `prompts/list`, `resources/list`)
+are catalog/discovery methods with no policy decisions to demonstrate. They are
+not routed through policy and have no scenarios.
+
 ## Human-in-the-loop: manager approval
 
 Some actions shouldn't happen on the caller's authority alone. `adjust_compensation`
@@ -559,7 +648,7 @@ the padding, so the wire stays correct. This is documented in the filter source.
 | `keycloak/realm-export.json` | Realm with users, clients, STE v2, and CIBA + the channel SPI |
 | `hr-mcp-server/` | Python mock MCP server (Dockerfile and `server.py`), incl. `adjust_compensation` |
 | `auth-channel/` | CIBA approval UI (`:5001`, "the manager's phone") for Approve / Deny; dev `/pending` + `/approve` API for scripted approval |
-| `scenarios/*.sh` | The twelve scenarios (08/09 session taint, 10/11 manager approval, 12 assertions) and `_lib.sh` helpers |
+| `scenarios/*.sh` | Twenty-two scenarios (01–12 tools, 13–22 prompts/resources/taint/post-phase) and `_lib.sh` helpers |
 | `mint-token.sh` | Mint a user or client token via Keycloak |
 | `verify-token-exchange.sh` | Check that STE v2 is configured correctly |
 | `walkthrough.sh` | Narrated tour of the core scenarios |

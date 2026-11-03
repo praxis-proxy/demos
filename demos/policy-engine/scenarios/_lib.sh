@@ -174,6 +174,43 @@ show_last_audit() {
   fi
 }
 
+call_prompts_get() {
+  local user_token="$1"
+  local client_token="$2"
+  local prompt_name="$3"
+  local arguments_json="$4"
+
+  local body
+  body="{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"prompts/get\",\"params\":{\"name\":\"$prompt_name\",\"arguments\":$arguments_json}}"
+  _print_response "$(_post_tool "$user_token" "$client_token" "$body")"
+}
+
+call_resources_read() {
+  local user_token="$1"
+  local client_token="$2"
+  local uri="$3"
+
+  local body
+  body=$(cat <<EOF
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "resources/read",
+  "params": {
+    "uri": "$uri"
+  }
+}
+EOF
+  )
+  _print_response "$(_post_tool "$user_token" "$client_token" "$body")"
+}
+
+known_gap() {
+  local component="$1"
+  echo "  [KNOWN GAP: issue 75 — $component]"
+  exit 0
+}
+
 step() {
   echo
   echo "============================================================"

@@ -123,15 +123,16 @@ plugins:
   # client, entity, tool args, and any delegation outcomes. Never
   # blocks — observation only.
   #
-  # One hook, because this demo declares only `tool:` routes. Under
-  # `dispatch: policy` a plugin runs where a `run(name)` step names it, so
-  # declaring the prompt and resource hooks too would leave two of the three
-  # uncovered and the load would say so. Add them back alongside the routes
-  # that need them.
+  # Three hooks: one per entity type that has a `run(audit-log)` step in
+  # its route. Under `dispatch: policy` a plugin runs where a `run(name)`
+  # step names it, so every hook declared here must have at least one
+  # route that references this plugin.
   - name: audit-log
     kind: audit/logger
     hooks:
       - cmf.tool_pre_invoke
+      - cmf.prompt_pre_invoke
+      - cmf.resource_pre_fetch
     mode: sequential
     # Ordering is the order the document writes the steps: a `run(name)`
     # step invokes the one plugin it names, so this records the final
@@ -325,6 +326,10 @@ routes:
         - "delegate(workday-oauth, target: workday-api, audience: workday-api, permissions: [read_compensation])"
         - "taint(secret, session)"
         - "run(audit-log)"
+      post_invocation:
+        - when: "result != ''"
+          do:
+            - "taint(pii_tool, session)"
     args:
       ssn: "str | redact(!perm.view_ssn)"
     result:
@@ -352,6 +357,9 @@ routes:
         - "run(audit-log)"
         - "run(pii-scan)"
         - "security.labels contains \"secret\": deny('external email blocked: this session accessed secret data', 'session_tainted_secret')"
+        - "security.labels contains \"pii_tool\": deny('external email blocked: tool response contained PII', 'session_tainted_pii_tool')"
+        - "security.labels contains \"pii_resource\": deny('external email blocked: resource response contained PII', 'session_tainted_pii_resource')"
+        - "security.labels contains \"pii_prompt\": deny('external email blocked: prompt response contained PII', 'session_tainted_pii_prompt')"
 
   # Sensitive mutating action. Small changes go straight through; an
   # adjustment over $10K requires the requester's manager to approve
@@ -365,3 +373,36 @@ routes:
           do:
             - "require_approval(manager-approver, from: claim.manager, channel: \"ciba\", scope: \"args.amount <= 25000\", purpose: \"Approve a compensation adjustment\", timeout: 24h)"
         - "run(audit-log)"
+
+  # ----------------------------------------------------------------
+  # Prompt routes — MCP prompts/get dispatches here.
+  # ----------------------------------------------------------------
+  - prompt: summarize-report
+    authorization:
+      pre_invocation:
+        - "require(role.hr)"
+        - "run(audit-log)"
+      post_invocation:
+        - when: "result != ''"
+          do:
+            - "taint(pii_prompt, session)"
+    args:
+      ssn: "str | redact(!perm.view_ssn)"
+    result:
+      ssn: "str | redact(!perm.view_ssn)"
+
+  # ----------------------------------------------------------------
+  # Resource routes — MCP resources/read dispatches here.
+  # ----------------------------------------------------------------
+  - resource: "hr://employees/compensation"
+    authorization:
+      pre_invocation:
+        - "require(role.hr)"
+        - "taint(secret, session)"
+        - "run(audit-log)"
+      post_invocation:
+        - when: "result != ''"
+          do:
+            - "taint(pii_resource, session)"
+    result:
+      ssn: "str | redact(!perm.view_ssn)"

@@ -179,6 +179,107 @@ beat "The scenario prints that emitted audit record inline below the response."
 pause
 bash scenarios/07-bob-pii-deny.sh
 
+# ----- PROMPTS & RESOURCES (Scenarios 13–15) ------------------------------
+
+banner "PROMPTS & RESOURCES — prompt: and resource: routes"
+
+beat "Scenario 13 — Bob (HR) retrieves the summarize-report prompt."
+beat "Expected: HTTP 200 + messages array with the compensation report template."
+beat "The prompt: route runs require(role.hr) → run(audit-log). Same policy"
+beat "pipeline as tool: routes, different CMF hook (cmf.prompt_pre_invoke)."
+pause
+bash scenarios/13-prompt-allow.sh
+pause
+
+beat "Scenario 14 — Alice (engineer) tries the same prompt."
+beat "Expected: HTTP 200 + JSON-RPC error -32001."
+beat "          data.violation = routes.prompt:summarize-report.pre_invocation[0]"
+beat "Same deny semantics as tool denials. MCP server never sees it."
+pause
+bash scenarios/14-prompt-deny.sh
+pause
+
+beat "Scenario 15 — Bob reads the hr://employees/compensation resource."
+beat "Expected: HTTP 200 + contents array with full employee data."
+beat "The resource: route runs require(role.hr) → taint(secret, session)"
+beat "→ run(audit-log). The taint fires here so scenario 18 can test"
+beat "cross-primitive data-flow control."
+pause
+bash scenarios/15-resource-allow.sh
+pause
+
+# ----- REDACTION (Scenarios 16, 17, 19) -----------------------------------
+
+banner "REDACTION — result: and args: on prompt and resource routes"
+
+beat "Scenario 16 — Eve (HR, no view_ssn) reads the compensation resource."
+beat "Expected: result: redaction should strip SSNs, but won't (issue 75)."
+beat "The result: pipeline evaluates against an empty string because"
+beat "PPE's message projection has no ContentPart::Resource arm."
+beat "The scenario detects unredacted SSNs and prints [KNOWN GAP]."
+pause
+bash scenarios/16-resource-redact.sh
+pause
+
+beat "Scenario 17 — Eve retrieves the prompt with include_ssn=true."
+beat "Expected: result: redaction should strip the SSN from the prompt"
+beat "response, but won't (issue 75). Same root cause as scenario 16 —"
+beat "no ContentPart::PromptResult arm in extract_result_from_message()."
+pause
+bash scenarios/17-prompt-redact.sh
+pause
+
+beat "Scenario 19 — Eve sends an SSN in prompt arguments."
+beat "Expected: the args: block redacts it BEFORE the MCP server sees it."
+beat "Unlike result: (broken), args: on prompts uses PromptRequest"
+beat "projection, which works. Check the MCP server logs for [REDACTED]."
+pause
+bash scenarios/19-prompt-arg-redact.sh
+pause
+
+# ----- CROSS-PRIMITIVE TAINT (Scenario 18) --------------------------------
+
+banner "CROSS-PRIMITIVE TAINT — resource read blocks tool call"
+
+beat "Scenario 18 — Bob reads a resource, then tries to email."
+beat "S1: Bob reads hr://employees/compensation → 200, session tainted."
+beat "S2: Bob sends email same session → denied (session_tainted_secret)."
+beat "S3: Bob sends email different session → 200 (clean session)."
+beat "This proves taint(secret, session) on a resource: route crosses"
+beat "primitive boundaries to block a subsequent tool: route."
+pause
+bash scenarios/18-resource-taint-tool-deny.sh
+pause
+
+# ----- POST-PHASE CONDITIONAL TAINT (Scenarios 20–22) --------------------
+
+banner "POST-PHASE CONDITIONAL TAINT — baseline vs issue 75 gap"
+
+beat "Scenario 22 — Tool post-phase conditional taint (BASELINE)."
+beat "get_compensation has: post_invocation: when result != '' →"
+beat "  taint(pii_tool, session). Since tool result: projection works,"
+beat "  result is actual JSON, the condition is true, the taint fires."
+beat "The email is denied. Valkey shows both 'secret' and 'pii_tool'."
+pause
+bash scenarios/22-tool-post-taint.sh
+pause
+
+beat "Scenario 20 — Resource post-phase conditional taint (ISSUE 75)."
+beat "Same pattern on the resource route: when result != '' →"
+beat "  taint(pii_resource, session). But result is '' (issue 75),"
+beat "  so the condition is always false and the taint never fires."
+beat "The deny is by pre-phase 'secret' only, not 'pii_resource'."
+pause
+bash scenarios/20-resource-post-taint.sh
+pause
+
+beat "Scenario 21 — Prompt post-phase conditional taint (ISSUE 75)."
+beat "Cleanest proof: the prompt route has NO pre-phase taint, so this"
+beat "isolates the post-phase entirely. result != '' is false (issue 75),"
+beat "taint(pii_prompt) never fires, and the email goes through."
+pause
+bash scenarios/21-prompt-post-taint.sh
+
 # ----- Wrap up ------------------------------------------------------------
 
 banner "Walkthrough complete"
@@ -205,6 +306,18 @@ echo "        attempts land on the trail too)"
 echo "      $(dim "•") MCP-compliant error responses: JSON-RPC error envelope"
 echo "        for application denials (HTTP 200, code -32001), HTTP 401 +"
 echo "        WWW-Authenticate for transport-level auth failures."
+echo "      $(dim "•") all three MCP primitives — tool:, prompt:, resource:"
+echo "        routes with the same policy pipeline (identity, APL, taint,"
+echo "        redaction, plugins)"
+echo "      $(dim "•") cross-primitive taint — a resource read taints the"
+echo "        session and blocks a later tool call (entity-type-agnostic)"
+echo "      $(dim "•") prompt args: redaction — the gateway rewrites prompt"
+echo "        arguments before the MCP server renders the template"
+echo "      $(dim "•") post-phase conditional taint — works on tools (baseline);"
+echo "        broken on resources and prompts (issue 75, known gap)"
+echo "      $(dim "•") issue 75 gap markers — result: projection on resource"
+echo "        and prompt routes evaluates against empty string; 4 scenarios"
+echo "        mark this with [KNOWN GAP] so the walkthrough continues"
 echo
 beat "To try this through an LLM, start chat.py:"
 echo "      $(dim "cd agent && python chat.py --persona bob   # or use --model")"

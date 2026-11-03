@@ -15,10 +15,21 @@ Run locally:
     uvicorn server:app --host 0.0.0.0 --port 9100
 
 Endpoint:
-    POST /mcp   — JSON-RPC 2.0 `tools/call` requests
+    POST /mcp   — JSON-RPC 2.0 requests
+
+Methods:
+    tools/list, tools/call      — tool discovery and invocation
+    prompts/list, prompts/get   — prompt template discovery and retrieval
+    resources/list, resources/read — resource discovery and content fetch
 
 Tools:
     get_compensation, send_email, display_compensation, get_directory
+
+Prompts:
+    summarize-report, onboarding-checklist
+
+Resources:
+    hr://employees/compensation, hr://employees/directory
 """
 
 import json
@@ -211,6 +222,135 @@ TOOLS = {
 }
 
 # ---------------------------------------------------------------------------
+# Prompt definitions and implementations
+# ---------------------------------------------------------------------------
+
+PROMPT_DEFINITIONS: list[dict[str, Any]] = [
+    {
+        "name": "summarize-report",
+        "description": "Generate a prompt for summarizing an employee's compensation report.",
+        "arguments": [
+            {"name": "employee_id", "description": "Employee identifier (e.g. EMP-001234)", "required": True},
+            {"name": "include_ssn", "description": "Whether to include SSN in the report", "required": False},
+        ],
+    },
+    {
+        "name": "onboarding-checklist",
+        "description": "Generate an onboarding checklist prompt for a department.",
+        "arguments": [
+            {"name": "department", "description": "Department name (e.g. Engineering)", "required": True},
+        ],
+    },
+]
+
+
+def prompt_summarize_report(args: dict[str, Any]) -> dict[str, Any]:
+    employee_id = args.get("employee_id", "")
+    include_ssn = args.get("include_ssn", False)
+    employee = EMPLOYEES.get(employee_id)
+    if not employee:
+        return {"error": f"Employee {employee_id} not found"}
+    data = {
+        "employee_id": employee["employee_id"],
+        "name": employee["name"],
+        "salary": employee["salary"],
+        "bonus": employee["bonus"],
+        "department": employee["department"],
+        "title": employee["title"],
+    }
+    if include_ssn:
+        data["ssn"] = employee["ssn"]
+    return {
+        "messages": [
+            {
+                "role": "user",
+                "content": {"type": "text", "text": (
+                    f"Summarize the following compensation report for {employee['name']}:\n\n"
+                    f"{json.dumps(data, indent=2)}"
+                )},
+            },
+        ],
+    }
+
+
+def prompt_onboarding_checklist(args: dict[str, Any]) -> dict[str, Any]:
+    department = args.get("department", "")
+    members = [
+        emp for emp in EMPLOYEES.values()
+        if emp["department"].lower() == department.lower()
+    ]
+    member_names = ", ".join(m["name"] for m in members) if members else "no current members"
+    return {
+        "messages": [
+            {
+                "role": "user",
+                "content": {"type": "text", "text": (
+                    f"Create an onboarding checklist for a new hire joining the {department} department. "
+                    f"Current team members: {member_names}."
+                )},
+            },
+        ],
+    }
+
+
+PROMPTS = {
+    "summarize-report": prompt_summarize_report,
+    "onboarding-checklist": prompt_onboarding_checklist,
+}
+
+# ---------------------------------------------------------------------------
+# Resource definitions and implementations
+# ---------------------------------------------------------------------------
+
+RESOURCE_DEFINITIONS: list[dict[str, Any]] = [
+    {
+        "uri": "hr://employees/compensation",
+        "name": "Employee Compensation Data",
+        "description": "Salary, bonus, SSN, and department data for all employees.",
+        "mimeType": "application/json",
+    },
+    {
+        "uri": "hr://employees/directory",
+        "name": "Employee Directory",
+        "description": "Name, department, title, and email for all employees.",
+        "mimeType": "application/json",
+    },
+]
+
+
+def resource_compensation() -> dict[str, Any]:
+    records = []
+    for emp in EMPLOYEES.values():
+        records.append({
+            "employee_id": emp["employee_id"],
+            "name": emp["name"],
+            "salary": emp["salary"],
+            "bonus": emp["bonus"],
+            "ssn": emp["ssn"],
+            "department": emp["department"],
+            "title": emp["title"],
+        })
+    return {"employees": records}
+
+
+def resource_directory() -> dict[str, Any]:
+    entries = []
+    for emp in EMPLOYEES.values():
+        entries.append({
+            "name": emp["name"],
+            "department": emp["department"],
+            "title": emp["title"],
+            "email": emp["email"],
+        })
+    return {"employees": entries}
+
+
+RESOURCES = {
+    "hr://employees/compensation": resource_compensation,
+    "hr://employees/directory": resource_directory,
+}
+
+# ---------------------------------------------------------------------------
 # JSON-RPC endpoint
 # ---------------------------------------------------------------------------
 
@@ -251,6 +391,7 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
         logger.info("  body.method               = %s", rpc.get("method"))
         params = rpc.get("params", {})
         logger.info("  body.params.name          = %s", params.get("name"))
+        logger.info("  body.params.uri           = %s", params.get("uri"))
         logger.info("  body.params.arguments     = %s", json.dumps(params.get("arguments", {})))
     except Exception as e:
         logger.warning("body is not JSON-RPC: %s", e)
@@ -261,50 +402,148 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
 
     method = rpc.get("method", "")
     rpc_id = rpc.get("id")
-    if method != "tools/call":
-        # tools/list and others — minimal stub so MCP clients don't
-        # error during discovery, but the demo never exercises these.
+
+    # ----- tools/list -----
+    if method == "tools/list":
+        tool_defs = [
+            {"name": name, "description": f"HR tool: {name}", "inputSchema": {"type": "object"}}
+            for name in TOOLS
+        ]
         return JSONResponse(
-            {"jsonrpc": "2.0", "result": {"tools": list(TOOLS.keys())}, "id": rpc_id},
+            {"jsonrpc": "2.0", "result": {"tools": tool_defs}, "id": rpc_id},
         )
 
-    tool_name = params.get("name", "")
-    args = params.get("arguments", {}) or {}
-    impl = TOOLS.get(tool_name)
-    if impl is None:
+    # ----- tools/call -----
+    if method == "tools/call":
+        tool_name = params.get("name", "")
+        args = params.get("arguments", {}) or {}
+        impl = TOOLS.get(tool_name)
+        if impl is None:
+            return JSONResponse(
+                {
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32601, "message": f"Unknown tool: {tool_name}"},
+                    "id": rpc_id,
+                },
+                status_code=404,
+            )
+        try:
+            out = impl(args)
+        except Exception as e:
+            logger.exception("tool '%s' failed", tool_name)
+            return JSONResponse(
+                {
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32000, "message": str(e)},
+                    "id": rpc_id,
+                },
+                status_code=500,
+            )
+        logger.info("OUTBOUND RESPONSE")
+        logger.info("  tool                      = %s", tool_name)
+        logger.info("  payload                   = %s", json.dumps(out)[:200])
         return JSONResponse(
             {
                 "jsonrpc": "2.0",
-                "error": {"code": -32601, "message": f"Unknown tool: {tool_name}"},
+                "result": {
+                    "content": [{"type": "text", "text": json.dumps(out, indent=2)}]
+                },
                 "id": rpc_id,
             },
-            status_code=404,
         )
 
-    try:
-        out = impl(args)
-    except Exception as e:
-        logger.exception("tool '%s' failed", tool_name)
+    # ----- prompts/list -----
+    if method == "prompts/list":
+        return JSONResponse(
+            {"jsonrpc": "2.0", "result": {"prompts": PROMPT_DEFINITIONS}, "id": rpc_id},
+        )
+
+    # ----- prompts/get -----
+    if method == "prompts/get":
+        prompt_name = params.get("name", "")
+        args = params.get("arguments", {}) or {}
+        impl = PROMPTS.get(prompt_name)
+        if impl is None:
+            return JSONResponse(
+                {
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32601, "message": f"Unknown prompt: {prompt_name}"},
+                    "id": rpc_id,
+                },
+                status_code=404,
+            )
+        try:
+            out = impl(args)
+        except Exception as e:
+            logger.exception("prompt '%s' failed", prompt_name)
+            return JSONResponse(
+                {
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32000, "message": str(e)},
+                    "id": rpc_id,
+                },
+                status_code=500,
+            )
+        logger.info("OUTBOUND RESPONSE")
+        logger.info("  prompt                    = %s", prompt_name)
+        logger.info("  payload                   = %s", json.dumps(out)[:200])
+        return JSONResponse(
+            {"jsonrpc": "2.0", "result": out, "id": rpc_id},
+        )
+
+    # ----- resources/list -----
+    if method == "resources/list":
+        return JSONResponse(
+            {"jsonrpc": "2.0", "result": {"resources": RESOURCE_DEFINITIONS}, "id": rpc_id},
+        )
+
+    # ----- resources/read -----
+    if method == "resources/read":
+        uri = params.get("uri", "")
+        impl = RESOURCES.get(uri)
+        if impl is None:
+            return JSONResponse(
+                {
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32002, "message": f"Unknown resource: {uri}"},
+                    "id": rpc_id,
+                },
+                status_code=404,
+            )
+        try:
+            out = impl()
+        except Exception as e:
+            logger.exception("resource '%s' failed", uri)
+            return JSONResponse(
+                {
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32000, "message": str(e)},
+                    "id": rpc_id,
+                },
+                status_code=500,
+            )
+        content_text = json.dumps(out, indent=2)
+        logger.info("OUTBOUND RESPONSE")
+        logger.info("  resource                  = %s", uri)
+        logger.info("  payload                   = %s", content_text[:200])
         return JSONResponse(
             {
                 "jsonrpc": "2.0",
-                "error": {"code": -32000, "message": str(e)},
+                "result": {
+                    "contents": [{"uri": uri, "mimeType": "application/json", "text": content_text}]
+                },
                 "id": rpc_id,
             },
-            status_code=500,
         )
 
-    logger.info("OUTBOUND RESPONSE")
-    logger.info("  tool                      = %s", tool_name)
-    logger.info("  payload                   = %s", json.dumps(out)[:200])
+    # ----- unknown method -----
     return JSONResponse(
         {
             "jsonrpc": "2.0",
-            "result": {
-                "content": [{"type": "text", "text": json.dumps(out, indent=2)}]
-            },
+            "error": {"code": -32601, "message": f"Unsupported method: {method}"},
             "id": rpc_id,
         },
+        status_code=404,
     )
 
 
