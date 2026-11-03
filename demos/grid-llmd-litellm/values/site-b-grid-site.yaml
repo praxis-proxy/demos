@@ -8,10 +8,6 @@ gridNetwork:
   gridId: grid-llmd-1
   region: site-b
   zone: site-b-1
-  routingPolicy: scoreFirst
-  scoringPolicy:
-    strategy: queueDepth
-  metricsRefreshInterval: "10s"
   signalTransport:
     mode: poll
   peerTrust:
