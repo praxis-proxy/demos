@@ -1,0 +1,43 @@
+# Praxis gateway config for the praxis-audit demo.
+#
+# One listener, one chain: classify the MCP call, run policy, route to the
+# HR MCP server. Logs go to stdout so stderr carries only OCSF records
+# (the sink's `destination: stderr`), one JSON object per line.
+
+listeners:
+  - name: mcp
+    address: "127.0.0.1:8090"
+    filter_chains:
+      - main
+
+filter_chains:
+  - name: main
+    filters:
+      - filter: mcp_classify
+
+      - filter: policy
+        config_path: config/policy.yaml
+        # read_write so `redact()` rewrites the body the upstream receives
+        # and the response the agent receives.
+        body_access: read_write
+        require_protocol_metadata: true
+        # Keycloak and Valkey are on localhost in this demo.
+        allow_private_idp: true
+
+      - filter: router
+        routes:
+          - path_prefix: "/"
+            cluster: hr_mcp
+
+      - filter: load_balancer
+        clusters:
+          - name: hr_mcp
+            endpoints:
+              - "127.0.0.1:9100"
+
+runtime:
+  logging:
+    output: stdout
+
+insecure_options:
+  allow_private_endpoints: true

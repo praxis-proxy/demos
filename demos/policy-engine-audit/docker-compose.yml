@@ -1,0 +1,90 @@
+# praxis-audit demo stack. The Praxis gateway runs on the host (see
+# run-demo.sh) so the kill -9 / restart beat can act on a real process and
+# Keycloak tokens carry the same localhost issuer the gateway checks.
+
+services:
+  # ─── Ledger services ───────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ledger
+      POSTGRES_PASSWORD: ledger
+      POSTGRES_DB: ledger
+    ports:
+      - "54330:5432"
+    volumes:
+      - ./.ledger/migrations/001_init.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - ./.ledger/migrations/002_correlation_id_text.sql:/docker-entrypoint-initdb.d/02-correlation-id.sql
+      - ./.ledger/demo/postgres-init/03-permissions.sql:/docker-entrypoint-initdb.d/03-permissions.sql
+      - ./.ledger/migrations/003_hash_index.sql:/docker-entrypoint-initdb.d/04-hash-index.sql
+      - ./.ledger/migrations/004_input_hash.sql:/docker-entrypoint-initdb.d/05-input-hash.sql
+      - ./.ledger/migrations/005_writer_signature.sql:/docker-entrypoint-initdb.d/06-writer-signature.sql
+      - ./.ledger/migrations/006_proof_envelope_v3.sql:/docker-entrypoint-initdb.d/07-proof-envelope-v3.sql
+      - ./.ledger/migrations/007_widen_entry_type.sql:/docker-entrypoint-initdb.d/08-widen-entry-type.sql
+      - ./.ledger/migrations/008_widen_columns.sql:/docker-entrypoint-initdb.d/09-widen-columns.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ledger"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  ledger:
+    build:
+      context: ./.ledger
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ARE_LEDGER_DB_CONNECTION_STRING: "host=postgres port=5432 user=ledger_app password=ledger_app dbname=ledger sslmode=disable"
+      ARE_LEDGER_GRPC_PORT: "19092"
+      ARE_LEDGER_HEALTH_PORT: "8080"
+      ARE_LEDGER_METRICS_PORT: "8083"
+    ports:
+      - "19292:19092"
+      - "18080:8080"
+      - "18083:8083"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/readyz || exit 1"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+
+  # ─── Praxis-side services ──────────────────────────
+  keycloak:
+    image: ${KEYCLOAK_IMAGE:-quay.io/keycloak/keycloak:26.2.5}
+    command: start-dev --import-realm --http-port=8081
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./keycloak:/opt/keycloak/data/import
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8081 && echo -e 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\n\r\n' >&3 && cat <&3 | grep -q '200' || exit 1"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 30s
+
+  hr-mcp:
+    build:
+      context: ./hr-mcp-server
+    ports:
+      - "9100:9100"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9100/healthz || exit 1"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+
+  valkey:
+    image: valkey/valkey:8-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
