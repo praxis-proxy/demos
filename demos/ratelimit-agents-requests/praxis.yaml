@@ -1,0 +1,53 @@
+# Praxis gateway config for the rate-limit demo (core `praxis` binary).
+#
+# Chain: policy -> router -> load_balancer. Pure L7 admission control; there is
+# NO `mcp` / `llm` filter and no body access. The `policy` filter resolves the
+# agent's JWT identity and runs the rate limiter at ratelimit.post_identity:
+#
+#   * admitted             -> forwarded to the mock model (HTTP 200)
+#   * over the limit       -> ratelimit.exceeded -> HTTP 429
+#   * no / invalid token   -> identity gate (HTTP 401)
+#   * valid token, no sub  -> ratelimit.no_identity -> HTTP 401
+#
+# Run from this directory (config_path is relative to the working directory):
+#   praxis -c praxis.yaml      (run-demo.sh builds the binary and launches it)
+
+admin:
+  # Enables /healthy and /metrics for the run-demo health check.
+  metrics_address: "127.0.0.1:9901"
+
+listeners:
+  - name: gateway
+    address: "127.0.0.1:8095"
+    protocol: http
+    filter_chains:
+      - main
+
+filter_chains:
+  - name: main
+    filters:
+      - filter: policy
+        config_path: ./ratelimit-policy.yaml
+        # The JWKS issuer runs on loopback (127.0.0.1:8888). The engine refuses
+        # loopback/private IdP addresses by default, since a jwks_url is an SSRF
+        # primitive when untrusted parties can set it; this demo runs entirely on
+        # one host, so opt in explicitly.
+        allow_private_idp: true
+
+      - filter: router
+        routes:
+          # Everything is forwarded to the mock model; per-route rate limiting is
+          # decided by the policy document's `routes:`, not here.
+          - path_prefix: "/"
+            cluster: mock-model
+
+      - filter: load_balancer
+        clusters:
+          - name: mock-model
+            endpoints:
+              - "127.0.0.1:9100"
+
+# The mock model runs on loopback (published from docker-compose). Praxis refuses
+# private/loopback upstreams by default; opt in for this single-host demo.
+insecure_options:
+  allow_private_endpoints: true

@@ -1,0 +1,3 @@
+# Live recording cut only (record/agent-repl.py). The deterministic run-demo.sh
+# needs none of this. Install into a venv: pip install -r record/requirements.txt
+httpx>=0.27,<1

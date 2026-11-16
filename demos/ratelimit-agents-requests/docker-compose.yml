@@ -1,0 +1,53 @@
+# Sidecars for the rate-limit demo: the static JWKS issuer and the mock model.
+#
+# Praxis itself is NOT here — it is built from source and run on the HOST by
+# run-demo.sh (see build-praxis.sh). Only these two stateless sidecars run in
+# compose, each a tiny script mounted into a stock python image, with health
+# checks so run-demo.sh can wait for readiness before building/launching Praxis.
+#
+#   docker compose up -d        # start issuer + mock model
+#   docker compose down         # stop them
+#
+# NOTE: run `./jwt/generate.sh` BEFORE `up` so ./jwt/jwks.json exists — otherwise
+# the bind mount below would create a directory in its place. run-demo.sh orders
+# this for you.
+#
+# The mock model keeps the demo deterministic (canned completions, no API key).
+# A separate setup swaps in a real local model for the live recording.
+
+services:
+  jwt-issuer:
+    image: python:3.12-slim
+    container_name: ratelimit-demo-jwt-issuer
+    command: ["python3", "/app/jwt-issuer.py"]
+    environment:
+      JWKS_FILE: /app/jwks.json
+      ISSUER_PORT: "8888"
+    volumes:
+      - ./jwt-issuer.py:/app/jwt-issuer.py:ro
+      - ./jwt/jwks.json:/app/jwks.json:ro
+    ports:
+      - "8888:8888"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8888/jwks.json')"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 2s
+
+  mock-model:
+    image: python:3.12-slim
+    container_name: ratelimit-demo-mock-model
+    command: ["python3", "/app/mock-model.py"]
+    environment:
+      MODEL_PORT: "9100"
+    volumes:
+      - ./mock-model.py:/app/mock-model.py:ro
+    ports:
+      - "9100:9100"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9100/__count')"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 2s

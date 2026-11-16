@@ -1,0 +1,8 @@
+# Runtime artifacts from the live recording cut.
+*.log
+*.cast
+*.gif
+*.mp4
+.venv/
+__pycache__/
+*.ndjson
