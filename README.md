@@ -28,6 +28,7 @@ See also [experimental builds](https://github.com/praxis-proxy/experimental).
 | [openai-responses-file-search](demos/openai-responses-file-search/) | Server-side file search — model calls file_search, Praxis dispatches to OGX's vector store search API, loops back with ranked results, and the model answers grounded in retrieved documents. |
 | [openai-responses-streaming-agentic-loop](demos/openai-responses-streaming-agentic-loop/) | Streaming agentic loop — one logical SSE stream preserved across multiple IRR rounds. Model calls a tool mid-stream (web search or MCP), Praxis withholds the terminal event, dispatches, and streams the final answer — `response.created` and `response.completed` each appear exactly once. |
 | [skillberry-agent-proxy](demos/skillberry-agent-proxy/) | A fully automated demo of Praxis as an agentic gateway for the Skillberry Agent platform, based on [skillberry-agent-praxis-poc](https://github.com/skillberry-ai/skillberry-agent-praxis-poc) |
+| [ratelimit-agents-requests](demos/ratelimit-agents-requests/) | Per-agent request rate limiting with the experimental PPE `ratelimit/limitador` plugin (embedded Limitador): an agent's calls to a shared model are counted per verified `subject.id`, and over-budget calls get a real `429` at the gateway before the model runs, with per-route budgets and unmetered routes. Deterministic verification plus a recorded three-pane walkthrough. |
 
 ## Grid QuickStarts
 
