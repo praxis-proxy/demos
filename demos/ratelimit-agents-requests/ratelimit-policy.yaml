@@ -1,0 +1,92 @@
+# Policy document for the rate-limit demo (loaded by the `policy` filter).
+#
+# Context: an AI agent calls a shared model through the gateway. The gateway caps
+# how often each agent may call the model, keyed on the agent's verified identity.
+#
+# Two plugins:
+#   identity/jwt        verifies the agent's RS256 token and resolves subject.id
+#                       from its `sub` claim (via the standard claim mapper).
+#   ratelimit/limitador counts admitted requests per verified agent at the
+#                       ratelimit.post_identity hook (embedded in-memory Limitador).
+#
+# Keying, selection, and placement (walkthrough #3/#4/#5):
+#   * KEYING (#3): the limiter keys its counter on `subject_id` (subject.id). Each
+#     verified agent gets its own counter; there are no CEL conditions anywhere.
+#   * SELECTION (#4): there is NO `global.rate_limits`, so a route with no limiter
+#     (/v1/models) is never rate limited. Routing decides what is metered.
+#   * PLACEMENT (#5): /v1/embeddings lists the same base limiter with a `config:`
+#     override giving it its own namespace, its own counter, and a lower allowance.
+#
+# A caller-supplied header is never bound, so it cannot be a limit key — the
+# limiter only reads the verified subject (capability read_subject).
+
+plugins:
+  - name: jwt-agent
+    kind: identity/jwt
+    hooks: [identity.resolve]
+    on_error: fail
+    # Needs perform_http to fetch the JWKS from the (local) issuer.
+    capabilities: [perform_http]
+    config:
+      credential:
+        kind: header
+        name: Authorization
+      trusted_issuers:
+        - issuer: "https://jwt-issuer.praxis.local"
+          audiences: ["ratelimit-agents-requests"]
+          algorithms: ["RS256"]
+          decoding_key:
+            kind: jwks_url
+            # jwt-issuer runs in docker-compose, published to the host on :8888.
+            url: "http://127.0.0.1:8888/jwks.json"
+            insecure_http: true
+      claim_mapper: standard
+
+  - name: requests
+    kind: ratelimit/limitador
+    hooks: [ratelimit.post_identity]
+    # Only the verified subject is read; no headers/claims, so a request header
+    # cannot stand in for the agent's identity.
+    capabilities: [read_subject]
+    config:
+      namespace: chat
+      # Explicit bindings replace the defaults (subject_id + http_method); we key
+      # on the agent's subject alone.
+      bindings:
+        subject_id: subject.id
+      limits:
+        - max: 3
+          seconds: 60
+          variables: [subject_id]
+
+global:
+  authentication:
+    - jwt-agent
+  # NB: deliberately NO `rate_limits:` here. Rate limiting is attached per route
+  # below, so unlisted routes (e.g. /v1/models) carry no limiter.
+
+routes:
+  # Primary model route (#1 accounting, #2 gate, #3 keying): 3 chat completions
+  # / 60s per agent. agent-blue and agent-green share the allowance but have
+  # separate counters.
+  - http: /v1/chat/completions
+    rate_limits:
+      steps:
+        - name: requests
+
+  # Route-specific limit (#5): the same base limiter, overridden to a lower
+  # allowance (1 request / 60s per agent) with its own namespace and counter.
+  - http: /v1/embeddings
+    rate_limits:
+      steps:
+        - name: requests
+          config:
+            namespace: embeddings
+            limits:
+              - max: 1
+                seconds: 60
+                variables: [subject_id]
+
+  # Selection (#4): /v1/models is intentionally absent from `routes:` and there
+  # is no global limiter, so it is never rate limited (it still requires a valid
+  # agent token, since authentication is global).

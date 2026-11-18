@@ -1,0 +1,49 @@
+# Gateway config for the RECORDING (core `praxis` binary).
+#
+# Same policy and chain as ../praxis.yaml, with the `access_log` filter added so
+# the recording's "gateway activity" pane can show each request's status and the
+# backend it hit (`upstream`). The backend is the deterministic MOCK model
+# (../docker-compose.yml, :9100) — the recording is reproducible, no API key/GPU.
+#
+# Launch from the demo root (config_path is relative to the working directory):
+#   praxis -c record/praxis-record.yaml      (run-record.sh does this)
+
+admin:
+  metrics_address: "127.0.0.1:9901"
+
+listeners:
+  - name: gateway
+    address: "127.0.0.1:8095"
+    protocol: http
+    filter_chains:
+      - main
+
+filter_chains:
+  - name: main
+    filters:
+      - filter: policy
+        config_path: ./ratelimit-policy.yaml
+        allow_private_idp: true
+
+      # One record per request (method, path, status, cluster, upstream). Use the
+      # file sink so it writes NDJSON live (a dedicated writer thread flushes each
+      # batch) instead of block-buffering to stdout — the recording's gateway-
+      # activity pane tails this file.
+      - filter: access_log
+        sink:
+          type: file
+          path: record/access.ndjson
+
+      - filter: router
+        routes:
+          - path_prefix: "/"
+            cluster: mock-model
+
+      - filter: load_balancer
+        clusters:
+          - name: mock-model
+            endpoints:
+              - "127.0.0.1:9100"
+
+insecure_options:
+  allow_private_endpoints: true

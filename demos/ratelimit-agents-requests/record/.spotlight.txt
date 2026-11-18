@@ -1,0 +1,3 @@
+[1;34mdone.[0m
+[2mthe gateway enforced a per-agent request budget,[0m
+[2mkeyed on the verified identity, before the model ran.[0m
