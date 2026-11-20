@@ -206,6 +206,10 @@ plugins:
       scope: openid
       approver_claim: preferred_username
       default_requested_expiry_seconds: 120
+      # Required since PPE #239. Pending approvals live in process memory and
+      # are lost on a gateway restart.
+      store:
+        kind: memory
 
 global:
   authentication:
@@ -389,7 +393,7 @@ routes:
     args:
       ssn: "str | redact(!perm.view_ssn)"
     result:
-      ssn: "str | redact(!perm.view_ssn)"
+      content: "str | redact(!perm.view_ssn)"
 
   # ----------------------------------------------------------------
   # Resource routes — MCP resources/read dispatches here.
@@ -405,4 +409,16 @@ routes:
           do:
             - "taint(pii_resource, session)"
     result:
-      ssn: "str | redact(!perm.view_ssn)"
+      content: "str | redact(!perm.view_ssn)"
+
+  # Pre-fetch field rule on the resource request (scenario 23).
+  # require(role.hr) is the control: it reads identity, not the message.
+  # The args.uri rule reads the ResourceRef the host puts on the request,
+  # which PPE projects as args (issue 75), so every HR read of this URI is
+  # denied with resource_uri_blocked.
+  - resource: "hr://employees/directory"
+    authorization:
+      pre_invocation:
+        - "require(role.hr)"
+        - "args.uri == 'hr://employees/directory': deny('employee directory is blocked by URI rule', 'resource_uri_blocked')"
+        - "run(audit-log)"

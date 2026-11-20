@@ -20,8 +20,8 @@
 # modify policy mid-run. Instead, we verify that the deny fires and
 # note that the post-phase taint also fired (both labels are set).
 #
-# This scenario is the working baseline for comparison against
-# scenarios 20 and 21 which hit issue 75.
+# This scenario is the tool counterpart of scenarios 20 (resource) and
+# 21 (prompt).
 
 set -euo pipefail
 source "$(dirname "$0")/_lib.sh"

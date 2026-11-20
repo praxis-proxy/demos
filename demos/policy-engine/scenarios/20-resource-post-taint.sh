@@ -2,68 +2,83 @@
 # Post-phase conditional taint on a resource route.
 #
 # The resource route has:
-#   pre_invocation:  taint(secret, session)           — unconditional, always fires
-#   post_invocation: result != '': taint(pii_resource, session) — conditional on response
+#   pre_invocation:  taint(secret, session)                 — unconditional, always fires
+#   post_invocation: result != '': taint(pii_resource, session) — conditional on the response
 #
-# The send_email route checks for both labels:
+# The send_email route checks for both labels, "secret" first:
 #   security.labels contains "secret"       → session_tainted_secret
 #   security.labels contains "pii_resource" → session_tainted_pii_resource
 #
-# This scenario uses a FRESH session (not tainted by pre-phase), so
-# we can isolate the post-phase taint. But wait — the pre-phase
-# taint(secret, session) is unconditional, so it always fires.
-# To isolate the post-phase taint, we use a two-step approach:
+# Two steps with one session:
+#   S1: Bob reads the resource. The pre-phase taint adds "secret"; the
+#       post-phase taint reads the projected response and adds "pii_resource".
+#       The script then reads the session's labels from Valkey and requires
+#       pii_resource.
+#   S2: Bob sends an email in the same session and is denied.
 #
-#   S1: Bob reads resource in session A → pre-phase taint fires (secret),
-#       post-phase conditional taint should also fire (pii_resource) but
-#       won't because result == '' (issue 75)
-#   S2: Bob sends email in session A → denied by "secret" (pre-phase),
-#       but NOT by "pii_resource" (post-phase never fired)
-#   S3: Check the violation code — if "session_tainted_secret" rather than
-#       "session_tainted_pii_resource", the post-phase taint didn't fire
+# Why S1 reads Valkey: "secret" is always set and checked first, so S2's deny
+# is session_tainted_secret whether or not pii_resource was set. The deny alone
+# cannot fail when the post-phase taint breaks; the label in the store can.
 #
-# When issue 75 is fixed, S2 should show BOTH labels, and the first
-# matching deny fires. Since "secret" is checked first, the violation
-# will still be "session_tainted_secret". To definitively prove post-phase
-# taint, we would need a route without pre-phase taint. This scenario
-# documents that the conditional post-phase taint cannot fire today.
+# Needs PPE issue 75 (Resource projection) and Praxis building the Resource
+# part from the resources/read response.
 
 set -euo pipefail
 source "$(dirname "$0")/_lib.sh"
 
-step "Resource post-phase conditional taint (issue 75 gap)"
+step "Resource post-phase conditional taint"
 note "post_invocation: result != '': taint(pii_resource, session)"
-note "Since result projects to '' for resources, this conditional never matches"
 
 BOB=$(mint bob)
 CLIENT=$(mint hr-copilot)
 POST_SESSION="post-res-$$-$RANDOM"
 
-step "S1 · Bob → resources/read (both pre and post taint should fire)"
-note "Session: $POST_SESSION"
-note "pre_invocation:  taint(secret, session) — always fires"
-note "post_invocation: result != '': taint(pii_resource, session) — won't fire (issue 75)"
+# ── S1: read the resource, then check the session's labels ───────
 
+step "S1 · Bob → resources/read (pre- and post-phase taints fire)"
+note "Session: $POST_SESSION"
+note "pre_invocation:  taint(secret, session)"
+note "post_invocation: result != '': taint(pii_resource, session)"
+
+KEYS_BEFORE=$(taint_keys)
 SESSION_ID="$POST_SESSION" call_resources_read "$BOB" "$CLIENT" "hr://employees/compensation"
+KEYS_AFTER=$(taint_keys)
+
+# The fresh session id gives exactly one new key: this session's.
+NEW_KEYS=$(comm -13 <(echo "$KEYS_BEFORE") <(echo "$KEYS_AFTER"))
+if [ "$(echo "$NEW_KEYS" | grep -c .)" -ne 1 ]; then
+  echo
+  note "ERROR: expected one new session key in Valkey, found: ${NEW_KEYS:-none}"
+  exit 1
+fi
+LABELS=$(valkey smembers "$NEW_KEYS" | sort | paste -sd' ' -)
+
+echo
+note "Session labels in Valkey: $LABELS"
+if ! echo " $LABELS " | grep -q ' secret '; then
+  note "ERROR: no 'secret' label — the pre-phase taint did not fire"
+  exit 1
+fi
+if ! echo " $LABELS " | grep -q ' pii_resource '; then
+  note "No 'pii_resource' label — the post-phase taint did not read the response"
+  regression "resource post-phase conditional taint"
+fi
+note "Both labels set — 'pii_resource' came from the resource response"
+
+# ── S2: email in the same session is denied ──────────────────────
 
 step "S2 · Bob → send_email (same session)"
 note "Session: $POST_SESSION"
-note "Expected: denied by 'session_tainted_secret' (pre-phase taint)"
-note "If post-phase also fired, 'session_tainted_pii_resource' label would also exist"
+note "Expected: denied by 'session_tainted_secret' ('secret' is checked before 'pii_resource')"
 
 RESPONSE=$(SESSION_ID="$POST_SESSION" call_send_email "$BOB" "$CLIENT")
 echo "$RESPONSE"
 
-if echo "$RESPONSE" | grep -q 'session_tainted_pii_resource'; then
+if echo "$RESPONSE" | grep -qE 'session_tainted_(secret|pii_resource)'; then
   echo
-  note "Denied by pii_resource — post-phase conditional taint IS working!"
-  note "This means issue 75 response projection has been fixed."
-elif echo "$RESPONSE" | grep -q 'session_tainted_secret'; then
+  note "Denied by the session taint, as expected"
+else
   echo
-  note "Denied by secret (pre-phase only) — post-phase conditional taint did NOT fire"
-  note "result != '' evaluated as '' != '' → false, because result projects to '' (issue 75)"
-  known_gap "resource post-phase conditional taint"
-elif echo "$RESPONSE" | grep -q 'status.*sent'; then
-  echo
-  note "ERROR: email sent — neither taint fired. Something is wrong."
+  note "ERROR: email not denied by the session taint"
+  regression "resource session taint"
 fi

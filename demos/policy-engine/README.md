@@ -241,20 +241,21 @@ example `./scenarios/01-bob-allow.sh`.
 | 11 | Bob adjusts compensation by > $10k | Human-in-the-loop: the gateway suspends with `-32120`, Alice approves out-of-band (CIBA), then it applies |
 | 12 | Bob calls `get_compensation`, then again spoofing an asserted header | `assertions:` renders identity into upstream headers, strips his raw token, and refuses to forward a header he set himself |
 
-### Prompt and resource scenarios (13–22)
+### Prompt and resource scenarios (13–23)
 
 | # | Scenario | Demonstrates |
 |---|----------|---|
-| 13 | Bob (HR) retrieves the `summarize-report` prompt | Prompt allow — `require(role.hr)` passes via `cmf.prompt_pre_invoke` |
+| 13 | Bob (HR) retrieves the `summarize-report` prompt | Prompt allow — `require(role.hr)` passes via `cmf.prompt_pre_invoke`; full text (Bob has `view_ssn`) |
 | 14 | Alice (engineer) retrieves the same prompt | Prompt deny — `require(role.hr)` blocks, JSON-RPC error |
-| 15 | Bob reads `hr://employees/compensation` resource | Resource allow — identity resolves, data returned, session tainted |
-| 16 | Eve reads `hr://employees/compensation` resource | Resource `result:` redaction — **\[KNOWN GAP\]** SSN not stripped (issue 75) |
-| 17 | Eve retrieves prompt with `include_ssn=true` | Prompt `result:` redaction — **\[KNOWN GAP\]** SSN not stripped (issue 75) |
+| 15 | Bob reads `hr://employees/compensation` resource | Resource allow — identity resolves, data returned (SSNs included), session tainted |
+| 16 | Eve reads `hr://employees/compensation` resource | Resource `result:` redaction — `result.content` is `[REDACTED]` (no `view_ssn`) |
+| 17 | Eve, then Bob, retrieve the prompt with `include_ssn=true` | Prompt `result:` redaction is per-user — Eve gets `[REDACTED]` (no `view_ssn`); Bob, the control, sees the SSN |
 | 18 | Bob reads resource, then calls `send_email` | Cross-primitive taint — resource `taint(secret, session)` blocks later tool call |
 | 19 | Eve retrieves prompt with SSN in arguments | Prompt `args:` redaction — MCP server receives `[REDACTED]` (works) |
-| 20 | Bob reads resource, checks post-phase taint | Resource post-phase conditional taint — **\[KNOWN GAP\]** `result != ''` is false (issue 75) |
-| 21 | Bob gets prompt, checks post-phase taint | Prompt post-phase conditional taint — **\[KNOWN GAP\]** same gap, cleanest proof (no pre-phase taint) |
-| 22 | Bob calls tool, checks post-phase taint | Tool post-phase conditional taint — **baseline** (works), Valkey confirms `pii_tool` label |
+| 20 | Bob reads resource, checks post-phase taint | Resource post-phase conditional taint — the script reads the session from Valkey and requires `pii_resource`; the email deny shows `secret`, which is checked first |
+| 21 | Bob gets prompt, checks post-phase taint | Prompt post-phase conditional taint — email denied by `session_tainted_pii_prompt` (cleanest proof: no pre-phase taint) |
+| 22 | Bob calls tool, checks post-phase taint | Tool post-phase conditional taint — Valkey confirms `pii_tool` label |
+| 23 | Alice, then Bob, read `hr://employees/directory` | Resource pre-fetch `args.uri` rule — Bob is denied with `resource_uri_blocked` |
 
 Scenarios 10 and 11 exercise the human-in-the-loop flow described in
 [Human-in-the-loop: manager approval](#human-in-the-loop-manager-approval)
@@ -461,34 +462,23 @@ differ.
   step that reads `result` works on tool routes because tool `result:` projection
   is functional. Valkey confirms both `secret` and `pii_tool` labels on the session.
 
-### What doesn't work yet (issue 75)
+### Prompt and resource responses (issue 75)
 
-Four scenarios hit a known gap where `result:` pipelines on prompt and resource
-routes evaluate against an empty string:
+Scenarios 16, 17, 20, 21 and 23 read the prompt or resource payload itself, not
+only the caller's identity. They need two pieces, both in place:
 
-- **Resource result: redaction** (scenario 16): Eve should see `[REDACTED]` SSNs
-  but sees the raw values.
-- **Prompt result: redaction** (scenario 17): Same gap on prompts.
-- **Resource post-phase conditional taint** (scenario 20): `result != ''` is
-  always false, so the taint never fires.
-- **Prompt post-phase conditional taint** (scenario 21): Same gap, and the
-  cleanest proof — the prompt route has no pre-phase taint, so the email going
-  through definitively proves the post-phase taint didn't fire.
-
-**Root cause.** Two independent layers are missing:
-
-1. **Praxis filter** (`json_rpc.rs`): `build_response_content_for_method()` only
-   builds `ContentPart` structures for `tools/call` responses. For `resources/read`
-   and `prompts/get`, it returns an empty list. Filed as
-   `issues/issue_praxis_resource_prompt_response_contentpart.md`.
-2. **PPE** (`message_projection.rs`): `extract_result_from_message()` only matches
-   `ContentPart::ToolResult`. No arm for `ContentPart::Resource` or
-   `ContentPart::PromptResult`. Tracked as issue 75; fix plan at
+1. **PPE** (issue 75): projects `ResourceRef` as `args`, and `Resource` and
+   `PromptResult` as `result`, then writes changes back. Fix plan at
    `policy/docs/plans/2026-11-02-001-fix-resource-prompt-projection-plan.md`.
+2. **Praxis filter** (`json_rpc.rs`): builds a `Resource` part per
+   `resources/read` entry and a `PromptResult` from `prompts/get`, and
+   re-serializes the changed fields into the response body.
 
-All four scenarios print `[KNOWN GAP: issue 75 — ...]` and exit 0 so the
-walkthrough continues. When both fixes land, these scenarios become the
-regression tests.
+If either regresses, these scenarios print `[REGRESSION: ...]` and exit 1.
+
+**Known gap (PPE issue 76).** PPE inspects only the first `Resource` part and
+the first prompt message. The demo's resource has one entry and its prompt one
+message, so the demo is fully covered; a response with more is not.
 
 **Not covered.** List operations (`tools/list`, `prompts/list`, `resources/list`)
 are catalog/discovery methods with no policy decisions to demonstrate. They are

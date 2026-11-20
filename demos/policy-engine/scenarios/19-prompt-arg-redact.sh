@@ -10,8 +10,8 @@
 #   * Check MCP server logs to confirm [REDACTED] arrived
 #
 # This tests request-side (args:) redaction on prompt routes, which
-# uses the PromptRequest content part — the one projection path that
-# works for prompts (unlike result:, which is issue 75).
+# uses the PromptRequest content part. Scenario 17 covers the response
+# side (result:).
 
 set -euo pipefail
 source "$(dirname "$0")/_lib.sh"

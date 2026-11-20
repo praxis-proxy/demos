@@ -205,10 +205,24 @@ EOF
   _print_response "$(_post_tool "$user_token" "$client_token" "$body")"
 }
 
-known_gap() {
+# Run valkey-cli in the compose `valkey` service (the session store).
+valkey() {
+  (cd "$DEMO_DIR" && docker compose exec -T valkey valkey-cli "$@") | tr -d '\r'
+}
+
+# Every session-taint key in the store, sorted. Keys are
+# taint:v1:<hash of subject and session id>, so a scenario finds its own
+# session by comparing the keys before and after a call.
+taint_keys() {
+  valkey --scan --pattern 'taint:v1:*' | sort
+}
+
+# A prompt/resource feature that used to be a known gap (issue 75) stopped
+# working. Exit non-zero so the failure is visible.
+regression() {
   local component="$1"
-  echo "  [KNOWN GAP: issue 75 — $component]"
-  exit 0
+  echo "  [REGRESSION: $component — expected to work since issue 75]"
+  exit 1
 }
 
 step() {
